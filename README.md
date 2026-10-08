@@ -2,9 +2,25 @@
 
 A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like style.
 
-- `/explain query:<text>`: explains a topic or a question.
-- Right-click a message → **Apps → Explain (video)**: explains that post. Discord sends the message text with the
-  command, so the bot does not need the privileged Message Content intent.
+- `/explain query:<text> [messages:<0-50>] [private:true]`: explains a topic or a question. With `messages`, it also
+  reads that many recent messages of the channel (for example: `/explain messages:20 query:кто тут прав?`).
+  With `private`, only you see the video.
+- Right-click a message → **Apps → Explain (video)**: explains that post.
+- Right-click a message → **Apps → Ask about this (video)**: opens a form for your question, then explains the post.
+
+For a post, the bot reads: the text, images (up to 4), link previews, small text files (`.txt`, `.py`, …),
+the pages behind links (up to 3), the message it replies to, and the 10 messages before it.
+
+### What needs the bot token (optional)
+
+Reading the replied-to message (if Discord does not include it) and earlier channel messages needs:
+1. the bot is a member of the server (Installation → Guild Install → scopes `applications.commands` **and** `bot`,
+   permissions *View Channels* and *Read Message History*);
+2. Developer Portal → *Bot* → **Message Content Intent** on (no review needed below 100 servers);
+3. secret `DISCORD_BOT_TOKEN` in the Worker.
+
+Without these, everything else works; the bot explains the post without the conversation around it.
+It can never read DMs between two people.
 
 ## How it works
 
@@ -40,6 +56,7 @@ Cloudflare builds the container image from `container/Dockerfile` on each push t
    | `ANTHROPIC_WORKSPACE_ID` | `wrkspc_…` only if the key is not scoped to a workspace; else leave it out |
    | `ELEVENLABS_API_KEY` | ElevenLabs API key |
    | `ELEVENLABS_VOICE_ID` | e.g. `xcVbjGhhLIoKi3va6mAe` (Viktoriya Voloshina, Russian female) |
+   | `DISCORD_BOT_TOKEN` | optional, for conversation context (see above) |
 
 3. **Discord app.** Developer Portal → your app:
    - *General Information* → *Interactions Endpoint URL* = `https://explain-bot.<your-subdomain>.workers.dev`.
@@ -84,6 +101,8 @@ python test_local.py sample_plan.json out.mp4   # fake audio, real renderer
 
 - Discord's interaction token expires after 15 minutes; a job that takes longer cannot post its video.
 - The KV daily limit is approximate (KV is eventually consistent).
+- Linked pages: plain HTML only (no JavaScript sites); private and internal addresses are refused.
+- Privacy: the post, its images and the conversation go to Anthropic and ElevenLabs.
 - Fonts: DejaVu (Latin, Cyrillic, Greek). Chinese/Japanese/Korean text will show as boxes.
 - Sonnet can still be wrong about facts. The renderer only guarantees that chart numbers match the formulas.
 - If all container instances are busy, the bot replies "busy" (queue of 4 jobs per instance).

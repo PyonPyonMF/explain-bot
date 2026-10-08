@@ -22,7 +22,7 @@ def worker():
     from pipeline import handle_job  # import here so the server answers health checks at once
     while True:
         job = JOBS.get()
-        log.info("job start (%s, %d chars)", job.get("kind"), len(job.get("text", "")))
+        log.info("job start (%s, %d chars, question=%s)", job.get("kind"), len(job.get("text") or ""), bool(job.get("question")))
         handle_job(job)
         JOBS.task_done()
 
@@ -45,9 +45,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("content-length") or 0)
             job = json.loads(self.rfile.read(n))
-            for k in ("application_id", "token", "text"):
+            for k in ("application_id", "token"):
                 if not isinstance(job.get(k), str) or not job[k]:
                     raise ValueError(f"missing {k}")
+            if not (job.get("text") or job.get("message")):
+                raise ValueError("missing text or message")
         except Exception as e:
             return self._send(400, {"error": str(e)})
         try:

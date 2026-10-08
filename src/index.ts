@@ -20,6 +20,7 @@ export interface Env {
   ANTHROPIC_WORKSPACE_ID?: string;
   ELEVENLABS_API_KEY: string;
   ELEVENLABS_VOICE_ID: string;
+  DISCORD_BOT_TOKEN?: string; // optional: lets the container read conversation context
   // vars
   ANTHROPIC_MODEL: string;
   ELEVENLABS_MODEL: string;
@@ -49,19 +50,28 @@ export class Renderer extends Container<Env> {
       BOT_LANG: env.BOT_LANG ?? "",
       DEBUG_ERRORS: env.DEBUG_ERRORS ?? "",
       CODE_VERSION: env.CF_VERSION_METADATA?.id ?? "",
+      DISCORD_BOT_TOKEN: env.DISCORD_BOT_TOKEN ?? "",
     };
   }
 }
 
 const STRINGS = {
   ru: {
-    empty: "В этом сообщении нет текста, который можно объяснить.",
+    empty: "В этом сообщении нечего объяснять.",
+    expired: "Форма устарела. Вызови команду ещё раз.",
+    modalTitle: "Что объяснить в этом сообщении?",
+    modalLabel: "Вопрос (можно пусто)",
+    modalPlaceholder: "например: кто тут прав и почему?",
     limit: (n: number) => `Лимит: ${n} видео в день. Попробуй завтра.`,
     busy: "⚠️ Сервер видео сейчас занят. Попробуй через пару минут.",
     failed: "⚠️ Не получилось запустить создание видео. Попробуй ещё раз.",
   },
   en: {
-    empty: "This message has no text to explain.",
+    empty: "There is nothing to explain in this message.",
+    expired: "This form expired. Run the command again.",
+    modalTitle: "What should I explain here?",
+    modalLabel: "Question (optional)",
+    modalPlaceholder: "e.g. who is right here and why?",
     limit: (n: number) => `Limit: ${n} videos per day. Try again tomorrow.`,
     busy: "⚠️ The video server is busy. Try again in a few minutes.",
     failed: "⚠️ Could not start the video job. Try again.",
@@ -73,6 +83,9 @@ const MAX_TEXT = 4000;
 // Discord constants
 const PING = 1;
 const APPLICATION_COMMAND = 2;
+const MODAL_SUBMIT = 5;
+const MODAL = 9;
+const ASK_COMMAND = "Ask about this (video)"; // message command that opens the question form
 const CHAT_INPUT = 1;
 const MESSAGE_COMMAND = 3;
 const PONG = 1;
@@ -84,8 +97,11 @@ interface Job {
   application_id: string;
   token: string;
   kind: "message" | "query";
-  text: string;
-  author?: string;
+  text: string; // the /explain query, or "" for a message
+  question?: string; // optional question from the form
+  message?: any; // trimmed Discord message (content, author, attachments, embeds, reply reference)
+  channel_id?: string;
+  context_messages?: number; // how many earlier channel messages to read (needs DISCORD_BOT_TOKEN)
   locale?: string;
 }
 
@@ -100,41 +116,128 @@ export default {
     }
     const i = JSON.parse(body);
     if (i.type === PING) return json({ type: PONG });
-    if (i.type !== APPLICATION_COMMAND) return new Response("unsupported interaction", { status: 400 });
-
     const S = env.BOT_LANG === "en" ? STRINGS.en : STRINGS.ru;
-    const job = buildJob(i);
-    if (!job || !job.text.trim()) return ephemeral(S.empty);
+    const d = i.data ?? {};
+
+    // "Ask about this (video)": store the message for 15 min and open the question form.
+    if (i.type === APPLICATION_COMMAND && d.type === MESSAGE_COMMAND && d.name === ASK_COMMAND) {
+      const m = d.resolved?.messages?.[d.target_id];
+      if (!m || !hasContent(m)) return ephemeral(S.empty);
+      await env.LIMITS.put(`ask:${i.id}`, JSON.stringify({ message: trimMessage(m), channel_id: channelId(i) }), {
+        expirationTtl: 900,
+      });
+      return json({
+        type: MODAL,
+        data: {
+          // channel and message ids let us re-read the message with the bot token if KV is not consistent yet
+          custom_id: `ask:${i.id}:${channelId(i) ?? ""}:${d.target_id}`,
+          title: S.modalTitle.slice(0, 45),
+          components: [
+            {
+              type: 1,
+              components: [
+                { type: 4, custom_id: "q", style: 2, label: S.modalLabel.slice(0, 45), placeholder: S.modalPlaceholder,
+                  required: false, max_length: 500 },
+              ],
+            },
+          ],
+        },
+      });
+    }
+
+    let job: Job | null;
+    let ephemeralReply = false;
+    if (i.type === MODAL_SUBMIT && String(d.custom_id ?? "").startsWith("ask:")) {
+      const [, iid, cid, mid] = String(d.custom_id).split(":");
+      let saved = (await env.LIMITS.get(`ask:${iid}`, "json")) as { message: any; channel_id?: string } | null;
+      if (!saved && env.DISCORD_BOT_TOKEN && cid && mid) {
+        // KV is eventually consistent across locations; fall back to reading the message again.
+        const r = await fetch(`https://discord.com/api/v10/channels/${cid}/messages/${mid}`, {
+          headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+        });
+        if (r.ok) saved = { message: trimMessage(await r.json()), channel_id: cid };
+      }
+      if (!saved) return ephemeral(S.expired);
+      const { message, channel_id } = saved;
+      job = { ...base(i), kind: "message", text: "", message, channel_id, question: findValue(d.components, "q") ?? "" };
+    } else if (i.type === APPLICATION_COMMAND) {
+      job = buildJob(i);
+      ephemeralReply = option(i, "private") === true;
+      if (!job) return ephemeral(S.empty);
+    } else {
+      return new Response("unsupported interaction", { status: 400 });
+    }
 
     const userId: string = i.member?.user?.id ?? i.user?.id ?? "unknown";
     const limit = parseInt(env.DAILY_LIMIT || "0", 10);
     if (limit > 0 && !(await takeQuota(env, userId, limit))) return ephemeral(S.limit(limit));
 
     ctx.waitUntil(startJob(env, job, S));
-    return json({ type: DEFERRED_CHANNEL_MESSAGE });
+    return json({ type: DEFERRED_CHANNEL_MESSAGE, data: ephemeralReply ? { flags: EPHEMERAL } : {} });
   },
 } satisfies ExportedHandler<Env>;
 
+function base(i: any) {
+  return { application_id: String(i.application_id), token: String(i.token), locale: i.locale };
+}
+
+function channelId(i: any): string | undefined {
+  return i.channel_id ?? i.channel?.id;
+}
+
+function option(i: any, name: string): any {
+  return (i.data?.options ?? []).find((o: any) => o.name === name)?.value;
+}
+
 function buildJob(i: any): Job | null {
   const d = i.data ?? {};
-  const base = { application_id: String(i.application_id), token: String(i.token), locale: i.locale };
   if (d.type === CHAT_INPUT) {
-    const q = (d.options ?? []).find((o: any) => o.name === "query")?.value;
-    return typeof q === "string" ? { ...base, kind: "query", text: q.slice(0, MAX_TEXT) } : null;
+    const q = option(i, "query");
+    if (typeof q !== "string" || !q.trim()) return null;
+    const n = Math.max(0, Math.min(50, Number(option(i, "messages") ?? 0) || 0));
+    return { ...base(i), kind: "query", text: q.slice(0, MAX_TEXT), channel_id: channelId(i), context_messages: n };
   }
   if (d.type === MESSAGE_COMMAND) {
     const m = d.resolved?.messages?.[d.target_id];
-    if (!m) return null;
-    const parts: string[] = [];
-    if (m.content) parts.push(m.content);
-    for (const e of m.embeds ?? []) {
-      if (e.title) parts.push(e.title);
-      if (e.description) parts.push(e.description);
-    }
-    const author = m.author?.global_name ?? m.author?.username;
-    return { ...base, kind: "message", text: parts.join("\n\n").slice(0, MAX_TEXT), author };
+    if (!m || !hasContent(m)) return null;
+    return { ...base(i), kind: "message", text: "", message: trimMessage(m), channel_id: channelId(i) };
   }
   return null;
+}
+
+function hasContent(m: any): boolean {
+  return Boolean((m.content ?? "").trim() || m.attachments?.length || m.embeds?.length);
+}
+
+/** Keep only what the container needs: text, author, files, link previews, reply reference. */
+function trimMessage(m: any, depth = 0): any {
+  if (!m) return undefined;
+  return {
+    id: m.id,
+    content: String(m.content ?? "").slice(0, MAX_TEXT),
+    timestamp: m.timestamp,
+    author: { username: m.author?.username, global_name: m.author?.global_name },
+    attachments: (m.attachments ?? []).slice(0, 10).map((a: any) => ({
+      url: a.url, proxy_url: a.proxy_url, filename: a.filename, content_type: a.content_type, size: a.size,
+    })),
+    embeds: (m.embeds ?? []).slice(0, 5).map((e: any) => ({
+      title: e.title, description: e.description?.slice(0, 1000), url: e.url,
+      image: e.image?.url ? { url: e.image.url } : undefined,
+      thumbnail: e.thumbnail?.url ? { url: e.thumbnail.url } : undefined,
+    })),
+    message_reference: m.message_reference ? { message_id: m.message_reference.message_id } : undefined,
+    referenced_message: depth === 0 ? trimMessage(m.referenced_message, 1) : undefined,
+  };
+}
+
+/** Find a text input value in modal-submit components (works for action rows and label components). */
+function findValue(components: any, id: string): string | undefined {
+  for (const c of components ?? []) {
+    if (c?.custom_id === id && typeof c.value === "string") return c.value.slice(0, 500);
+    const inner = findValue(c?.components, id) ?? (c?.component ? findValue([c.component], id) : undefined);
+    if (inner !== undefined) return inner;
+  }
+  return undefined;
 }
 
 async function startJob(env: Env, job: Job, S: (typeof STRINGS)["ru"]): Promise<void> {
