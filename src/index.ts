@@ -8,10 +8,11 @@
  * (deferred response) within 3 seconds, and hands the job to the render container.
  * The container makes the video and edits the original response itself (token valid 15 minutes).
  */
-import { Container, getRandom } from "@cloudflare/containers";
+import { Container, getContainer } from "@cloudflare/containers";
 
 export interface Env {
   RENDERER: DurableObjectNamespace<Renderer>;
+  CF_VERSION_METADATA: WorkerVersionMetadata;
   LIMITS: KVNamespace;
   // secrets
   DISCORD_PUBLIC_KEY: string;
@@ -47,6 +48,7 @@ export class Renderer extends Container<Env> {
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB ?? "",
       BOT_LANG: env.BOT_LANG ?? "",
       DEBUG_ERRORS: env.DEBUG_ERRORS ?? "",
+      CODE_VERSION: env.CF_VERSION_METADATA?.id ?? "",
     };
   }
 }
@@ -137,8 +139,11 @@ function buildJob(i: any): Job | null {
 
 async function startJob(env: Env, job: Job, S: (typeof STRINGS)["ru"]): Promise<void> {
   try {
+    // Instance names include the Worker version, so every deploy starts fresh containers with the new image.
+    // (An old instance stays alive as long as it gets jobs within sleepAfter, and would keep the old image.)
     const n = Math.max(1, parseInt(env.RENDER_INSTANCES || "2", 10));
-    const stub = await getRandom(env.RENDERER, n);
+    const version = (env.CF_VERSION_METADATA?.id ?? "dev").slice(0, 8);
+    const stub = getContainer(env.RENDERER, `render-${version}-${Math.floor(Math.random() * n)}`);
     const res = await stub.fetch(
       new Request("http://renderer/jobs", {
         method: "POST",

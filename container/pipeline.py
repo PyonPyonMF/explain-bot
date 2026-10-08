@@ -301,7 +301,8 @@ def handle_job(job):
         log.exception("job failed")
         msg = S["failed"]
         if os.environ.get("DEBUG_ERRORS") == "1":  # show the reason in Discord while setting up the bot
-            msg += f"\n```{type(e).__name__}: {str(e)[:400]}```"
+            ver = (os.environ.get("CODE_VERSION") or "?")[:8]
+            msg += f"\n```[{ver}] {type(e).__name__}: {str(e)[:400]}```"
         _safe_text(job, msg)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
