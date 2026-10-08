@@ -14,7 +14,7 @@ Discord ──► Worker (src/index.ts)
               ctx.waitUntil: POST job to the container ──► returns 202 at once
                                      │
               Container (container/, Python, Cloudflare Containers)
-                1. Sonnet (claude-sonnet-5-5): forced tool call → JSON scene plan
+                1. Sonnet (claude-sonnet-5-5): structured output (JSON schema) → scene plan
                 2. plan.py: strict validation; every chart number is computed by code, not by the model
                 3. ElevenLabs: one MP3 per scene (previous_text/next_text keep the voice continuous)
                 4. scenes.py: matplotlib frames → ffmpeg, each scene as long as its voice clip

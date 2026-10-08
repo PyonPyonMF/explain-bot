@@ -78,13 +78,18 @@ _S = {"type": "string"}
 _N = {"type": "number"}
 
 
+# Fields the model may leave out. Structured outputs allow at most 24 optional fields in total.
+OPTIONAL = {"subtitle", "attribution", "where", "x_label", "y_label", "formula_label", "marker_x", "marker_label",
+            "bias", "activation", "unit", "group", "cannot_explain_reason"}
+
+
 def _scene(type_name, props, required, desc):
-    p = {"type": {"const": type_name},
-         "heading": {"type": "string", "description": "Short scene heading, max 50 chars."},
+    p = {"type": {"type": "string", "enum": [type_name]},
+         "heading": {"type": "string", "description": "Short scene heading, max 50 chars. Empty string for title and statement scenes if not needed."},
          "narration": {"type": "string", "description": "What the narrator says in this scene. 1-3 short sentences, max 350 chars. Plain text, no markdown, no formulas, numbers written as words where natural."}}
     p.update(props)
-    return {"type": "object", "description": desc, "properties": p,
-            "required": ["type", "narration"] + required, "additionalProperties": False}
+    req = [k for k in p if k not in OPTIONAL]
+    return {"type": "object", "description": desc, "properties": p, "required": req, "additionalProperties": False}
 
 
 SCENE_SCHEMAS = [
@@ -132,23 +137,55 @@ SCENE_SCHEMAS = [
                            "key": _S, "text": _S}, "required": ["key", "text"], "additionalProperties": False}}},
            ["heading", "rows"], "Closing summary: short key word + one line each. Use once, last."),
 ]
-SCENE_TYPES = [s["properties"]["type"]["const"] for s in SCENE_SCHEMAS]
+SCENE_TYPES = [s["properties"]["type"]["enum"][0] for s in SCENE_SCHEMAS]
 
-PLAN_TOOL = {
-    "name": "submit_video_plan",
-    "description": "Submit the plan for a short narrated explainer video.",
-    "input_schema": {
+PLAN_SCHEMA_RAW = {
         "type": "object",
         "properties": {
             "cannot_explain_reason": {"type": "string", "description": "Set ONLY if you will not explain this request. Short reason in the user's language. Then scenes may be empty."},
             "title": {"type": "string", "description": "Video title, max 60 chars."},
             "language": {"type": "string", "description": "BCP-47 code of the narration language, e.g. ru, en."},
-            "scenes": {"type": "array", "maxItems": MAX_SCENES, "items": {"anyOf": SCENE_SCHEMAS}},
+            "scenes": {"type": "array", "maxItems": MAX_SCENES, "description": "Empty only when cannot_explain_reason is set.",
+                       "items": {"anyOf": SCENE_SCHEMAS}},
         },
         "required": ["title", "language", "scenes"],
         "additionalProperties": False,
-    },
 }
+
+
+def to_structured_schema(node):
+    """Make a JSON schema fit the structured-output subset (same rules as the Anthropic SDK's transform_schema):
+    keep type/anyOf/enum/description/properties/required/items and minItems 0 or 1; move other keywords
+    (maxItems, minimum, maximum, ...) into the description; set additionalProperties false on every object."""
+    node = dict(node)
+    out = {}
+    if "anyOf" in node:
+        out["anyOf"] = [to_structured_schema(v) for v in node.pop("anyOf")]
+        node.pop("type", None)
+    else:
+        out["type"] = node.pop("type")
+    for k in ("enum", "description"):
+        if k in node:
+            out[k] = node.pop(k)
+    t = out.get("type")
+    if t == "object":
+        out["properties"] = {k: to_structured_schema(v) for k, v in node.pop("properties", {}).items()}
+        node.pop("additionalProperties", None)
+        out["additionalProperties"] = False
+        if "required" in node:
+            out["required"] = node.pop("required")
+    elif t == "array":
+        if "items" in node:
+            out["items"] = to_structured_schema(node.pop("items"))
+        if node.get("minItems") in (0, 1):
+            out["minItems"] = node.pop("minItems")
+    if node:  # unsupported keywords become a hint in the description
+        hint = "{" + ", ".join(f"{k}: {v}" for k, v in node.items()) + "}"
+        out["description"] = (out.get("description", "") + "\n\n" + hint).strip()
+    return out
+
+
+PLAN_SCHEMA = to_structured_schema(PLAN_SCHEMA_RAW)
 
 # --------------------------------------------------------------------------
 # Validation
@@ -226,7 +263,7 @@ def _range(p):
 
 
 def _validate_scene(s):
-    t = s.get("type")
+    t = str(s.get("type", "")).strip().lower()
     if t not in SCENE_TYPES:
         raise PlanError(f"unknown scene type {t}")
     o = {"type": t,
