@@ -195,11 +195,14 @@ def _sandbox_ids():
 def run_sandbox(spec_path, timeout):
     ids = _sandbox_ids()
     home = ids[2] if ids else "/tmp"
+    # One BLAS thread: OpenBLAS reserves memory per visible CPU, and a cloud container can see all host CPUs,
+    # which breaks `import numpy` under the address-space limit below.
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "MPLBACKEND": "Agg", "HOME": home,
-           "MPLCONFIGDIR": os.path.join(home, ".mpl"), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8"}
+           "MPLCONFIGDIR": os.path.join(home, ".mpl"), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8",
+           "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1"}
 
     def drop():
-        resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))
+        resource.setrlimit(resource.RLIMIT_AS, (6 << 30, 6 << 30))
         if ids and os.getuid() == 0:
             os.setgroups([])
             os.setgid(ids[1])
@@ -344,7 +347,7 @@ def make_video_fullgen(job, workdir, progress):
     _, user_text = P.build_user_content(job, images, texts)
     content = images + [{"type": "text", "text": user_text}]
 
-    plan, code = None, None
+    plan, code, stop = None, None, None
     for attempt in range(2):
         try:
             text, stop = claude(GEN_SYSTEM, content)
@@ -356,7 +359,7 @@ def make_video_fullgen(job, workdir, progress):
         except FullGenFailed as e:
             log.warning("generation attempt %d failed: %s", attempt, e)
     if not plan or not code:
-        raise FullGenFailed("Sonnet returned no usable plan and code")
+        raise FullGenFailed(f"Sonnet returned no usable plan and code (last stop_reason: {stop})")
     log.info("generated %d scenes, %d lines of code in %.0fs", len(plan["scenes"]), code.count("\n"),
              time.time() - t_start)
 
@@ -365,11 +368,14 @@ def make_video_fullgen(job, workdir, progress):
         voice_future = bg.submit(P.voice_all, plan, workdir)
         est = [len(s["narration"]) / 14.0 for s in plan["scenes"]]
 
-        good_code = None
+        good_code, last_error = None, ""
         for rnd in range(REVIEW_ROUNDS + 1):
             result = test_render(code, plan, est, workdir, rnd)
             if not result.get("import_error"):
                 good_code = code
+            else:
+                last_error = result["import_error"]
+                log.warning("test round %d: code does not run: %s", rnd, last_error[-500:])
             if rnd == REVIEW_ROUNDS or not needs_review(result) and rnd > 0:
                 break
             if time.time() - t_start > REVIEW_DEADLINE:
@@ -382,7 +388,8 @@ def make_video_fullgen(job, workdir, progress):
             code = new
         audio = voice_future.result()
     if good_code is None:
-        raise FullGenFailed("the generated code never ran")
+        raise FullGenFailed("the generated code never ran: " + last_error.strip().splitlines()[-1][:300]
+                            if last_error.strip() else "the generated code never ran")
     if good_code != code:
         log.warning("last review broke the code; using the last working version")
     progress(P.S["p_render"])

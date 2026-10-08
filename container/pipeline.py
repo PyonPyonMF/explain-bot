@@ -300,9 +300,10 @@ def discord_text(job, content):
            "discord")
 
 
-def discord_video(job, path, title):
+def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
-    payload = {"content": f"**{title}**"[:1900], "allowed_mentions": {"parse": []},
+    content = f"**{title}**" + (f"\n{debug}" if debug else "")
+    payload = {"content": content[:1900], "allowed_mentions": {"parse": []},
                "attachments": [{"id": 0, "filename": "explain.mp4"}]}
     with open(path, "rb") as f:
         video = f.read()
@@ -321,17 +322,23 @@ def discord_video(job, path, title):
 def handle_job(job):
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
-        path, title = None, None
+        path, title, note = None, None, ""
         if os.environ.get("FULL_GEN", "1") == "1":
             from fullgen import FullGenFailed, make_video_fullgen
             try:
                 path, title = make_video_fullgen(job, workdir, lambda msg: _safe_text(job, msg))
             except FullGenFailed as e:
                 log.warning("full gen failed, using templates: %s", e)
+                note = f"full gen failed, templates used: {e}"
+        else:
+            note = "FULL_GEN is off, templates used"
         if not path:
             path, plan = make_video(job, workdir)
             title = plan["title"]
-        discord_video(job, path, title)
+        debug = ""
+        if note and os.environ.get("DEBUG_ERRORS") == "1":
+            debug = f"-# [{(os.environ.get('CODE_VERSION') or '?')[:8]}] {note[:400]}"
+        discord_video(job, path, title, debug)
     except UserError as e:
         log.info("user error: %s", e)
         _safe_text(job, str(e))
