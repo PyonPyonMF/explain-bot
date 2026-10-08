@@ -31,7 +31,7 @@
   "vars": {
     "ANTHROPIC_MODEL": "claude-sonnet-5-5",
     "ELEVENLABS_MODEL": "eleven_multilingual_v2",
-    "DAILY_LIMIT": "5",
+    "DAILY_LIMIT": "500",
     "MAX_UPLOAD_MB": "9.5",
     "BOT_LANG": "ru",
     "RENDER_INSTANCES": "2",
