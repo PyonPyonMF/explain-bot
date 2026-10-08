@@ -34,6 +34,8 @@
     "DAILY_LIMIT": "5",
     "MAX_UPLOAD_MB": "9.5",
     "BOT_LANG": "ru",
-    "RENDER_INSTANCES": "2"
+    "RENDER_INSTANCES": "2",
+    // "1" = write the error reason into the Discord message. Set to "0" when the bot works.
+    "DEBUG_ERRORS": "1"
   }
 }

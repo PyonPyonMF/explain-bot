@@ -269,9 +269,12 @@ def handle_job(job):
     except UserError as e:
         log.info("user error: %s", e)
         _safe_text(job, str(e))
-    except Exception:
+    except Exception as e:
         log.exception("job failed")
-        _safe_text(job, S["failed"])
+        msg = S["failed"]
+        if os.environ.get("DEBUG_ERRORS") == "1":  # show the reason in Discord while setting up the bot
+            msg += f"\n```{type(e).__name__}: {str(e)[:400]}```"
+        _safe_text(job, msg)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

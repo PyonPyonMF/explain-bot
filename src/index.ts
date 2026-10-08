@@ -26,6 +26,7 @@ export interface Env {
   MAX_UPLOAD_MB: string;
   BOT_LANG: string;
   RENDER_INSTANCES: string;
+  DEBUG_ERRORS: string;
 }
 
 export class Renderer extends Container<Env> {
@@ -45,6 +46,7 @@ export class Renderer extends Container<Env> {
       ELEVENLABS_MODEL: env.ELEVENLABS_MODEL ?? "",
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB ?? "",
       BOT_LANG: env.BOT_LANG ?? "",
+      DEBUG_ERRORS: env.DEBUG_ERRORS ?? "",
     };
   }
 }
