@@ -4,3 +4,5 @@ dist/
 __pycache__/
 *.mp4
 .dev.vars
+.env
+data/

@@ -1,0 +1,7 @@
+# Automatic HTTPS for $DOMAIN. Only /interactions is public.
+{$DOMAIN} {
+	handle /interactions {
+		reverse_proxy bot:8080
+	}
+	respond 404
+}

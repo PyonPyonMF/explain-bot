@@ -46,6 +46,32 @@ Discord ──► Worker (src/index.ts)
 Generated code runs as an unprivileged user without the API keys in its environment; it cannot read the
 server's environment or write to /app. It still has network access.
 
+## Self-hosting (your own server, no Cloudflare)
+
+One Docker container receives the Discord interactions (`POST /interactions`) and renders the videos.
+No Worker, KV or Durable Objects; the daily limit is stored in `./data/bot.sqlite`.
+
+Requirements: Linux x86_64, Docker with Compose, 2+ CPUs, 4+ GB RAM, and a public HTTPS address.
+
+```bash
+git clone https://github.com/PyonPyonMF/explain-bot && cd explain-bot
+cp .env.example .env && nano .env          # keys, DISCORD_PUBLIC_KEY, DOMAIN
+```
+
+HTTPS, choose one:
+- **Caddy (included):** a DNS A record for `DOMAIN` points to the server, ports 80 and 443 are open.
+  `docker compose --profile caddy up -d --build` (Caddy gets a Let's Encrypt certificate itself).
+- **Your own nginx / Traefik:** `docker compose up -d --build`, then proxy `https://your.domain/interactions`
+  to `http://127.0.0.1:8080/interactions`. Expose only that path.
+- **Cloudflare Tunnel:** run `cloudflared` to `http://localhost:8080`, public hostname path `/interactions`.
+
+Then: Discord Developer Portal → *General Information* → *Interactions Endpoint URL* =
+`https://your.domain/interactions` → *Save* (Discord sends a signed PING; the bot must already run).
+Commands are registered the same way as for Cloudflare (`scripts/register-commands.sh`).
+
+Logs: `docker compose logs -f bot`. Update: `git pull && docker compose up -d --build`.
+After switching, the Cloudflare Worker receives nothing; you can delete it and cancel Workers Paid.
+
 ## Deploy with Workers Builds (no Docker on your computer)
 
 Cloudflare builds the container image from `container/Dockerfile` on each push to `main`.

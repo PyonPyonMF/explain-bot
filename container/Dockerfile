@@ -16,7 +16,7 @@ RUN python -c "import matplotlib.pyplot as plt; plt.figure(); plt.text(0, 0, 'т
 RUN useradd --create-home --uid 10001 sandbox \
  && su sandbox -s /bin/sh -c "MPLCONFIGDIR=/home/sandbox/.mpl python -c \"import matplotlib.pyplot as plt; plt.figure(); plt.text(0, 0, 'тест'); plt.savefig('/tmp/s.png')\""
 
-COPY plan.py scenes.py pipeline.py inputs.py server.py kit.py gen_harness.py fullgen.py ./
+COPY plan.py scenes.py pipeline.py inputs.py server.py kit.py gen_harness.py fullgen.py interactions.py ./
 RUN chmod -R a+rX /app
 
 EXPOSE 8080

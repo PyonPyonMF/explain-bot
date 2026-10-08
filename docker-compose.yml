@@ -1,0 +1,37 @@
+# Self-hosted explain-bot: one container receives Discord interactions and renders the videos.
+#   cp .env.example .env   # fill in the keys
+#   docker compose up -d --build                      # bot only, on 127.0.0.1:8080 (use your own reverse proxy)
+#   docker compose --profile caddy up -d --build      # bot + Caddy with automatic HTTPS for $DOMAIN
+services:
+  bot:
+    build: ./container
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      ENABLE_JOBS_ENDPOINT: "0"   # no Cloudflare Worker here; only /interactions is used
+      CODE_VERSION: self-hosted
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:8080:8080"     # local only; the internet reaches it through the reverse proxy
+    # Full gen renders one scene per CPU; give it at least 2 CPUs and 4 GB RAM.
+
+  caddy:
+    image: caddy:2
+    profiles: ["caddy"]
+    restart: unless-stopped
+    depends_on: [bot]
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
