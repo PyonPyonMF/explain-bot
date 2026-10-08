@@ -85,6 +85,11 @@ def lint(fig):
 def run_test(fns, spec, out):
     res = {"scenes": []}
     fig = plt.figure(figsize=(W / S.DPI, H / S.DPI), dpi=S.DPI)
+    # Warm-up frame: the first draw of a process loads fonts and caches and would look "slow".
+    try:
+        fig.clf(); fns[spec_indexes(spec)[0]](fig, 0.0, spec["scenes"][spec_indexes(spec)[0]]["T"]); fig.canvas.draw()
+    except Exception:
+        pass
     for k in spec_indexes(spec):
         sc, T = spec["scenes"][k], spec["scenes"][k]["T"]
         subs = S.build_subtitles(sc.get("narration", ""), sc.get("audio_len", 0))
