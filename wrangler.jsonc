@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "explain-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // Render container: Python + matplotlib + ffmpeg. standard-2 = 1 vCPU, 6 GiB.
+  // One vCPU renders about 1 second of video per second.
+  "containers": [
+    {
+      "class_name": "Renderer",
+      "image": "./container/Dockerfile",
+      "image_build_context": "./container",
+      "instance_type": "standard-2",
+      "max_instances": 3
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "RENDERER", "class_name": "Renderer" }]
+  },
+  "exports": {
+    "Renderer": { "type": "durable-object", "storage": "sqlite" }
+  },
+
+  // Per-user daily limit counter (created with the Cloudflare connector).
+  "kv_namespaces": [{ "binding": "LIMITS", "id": "c96c43c328e24b168d0026b1a91cd550" }],
+
+  // Non-secret settings. Secrets (DISCORD_PUBLIC_KEY, ANTHROPIC_API_KEY, ANTHROPIC_WORKSPACE_ID,
+  // ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID) are set in the dashboard or with `wrangler secret put`.
+  "vars": {
+    "ANTHROPIC_MODEL": "claude-sonnet-5-5",
+    "ELEVENLABS_MODEL": "eleven_multilingual_v2",
+    "DAILY_LIMIT": "5",
+    "MAX_UPLOAD_MB": "9.5",
+    "BOT_LANG": "ru",
+    "RENDER_INSTANCES": "2"
+  }
+}

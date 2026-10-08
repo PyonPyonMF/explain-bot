@@ -1,0 +1,20 @@
+{
+  "name": "explain-bot",
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc",
+    "register": "./scripts/register-commands.sh"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261008.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.148.0"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "private": true,
+  "type": "module"
+}
