@@ -4,6 +4,7 @@ Sonnet only chooses scenes and text. Every number shown in a chart is computed
 by the renderer from the parameters below, never typed by the model.
 """
 import ast
+import json
 import math
 import re
 
@@ -78,7 +79,7 @@ _S = {"type": "string"}
 _N = {"type": "number"}
 
 
-# Fields the model may leave out. Structured outputs allow at most 24 optional fields in total.
+# Fields the model may leave out.
 OPTIONAL = {"subtitle", "attribution", "where", "x_label", "y_label", "formula_label", "marker_x", "marker_label",
             "bias", "activation", "unit", "group", "cannot_explain_reason"}
 
@@ -153,39 +154,9 @@ PLAN_SCHEMA_RAW = {
 }
 
 
-def to_structured_schema(node):
-    """Make a JSON schema fit the structured-output subset (same rules as the Anthropic SDK's transform_schema):
-    keep type/anyOf/enum/description/properties/required/items and minItems 0 or 1; move other keywords
-    (maxItems, minimum, maximum, ...) into the description; set additionalProperties false on every object."""
-    node = dict(node)
-    out = {}
-    if "anyOf" in node:
-        out["anyOf"] = [to_structured_schema(v) for v in node.pop("anyOf")]
-        node.pop("type", None)
-    else:
-        out["type"] = node.pop("type")
-    for k in ("enum", "description"):
-        if k in node:
-            out[k] = node.pop(k)
-    t = out.get("type")
-    if t == "object":
-        out["properties"] = {k: to_structured_schema(v) for k, v in node.pop("properties", {}).items()}
-        node.pop("additionalProperties", None)
-        out["additionalProperties"] = False
-        if "required" in node:
-            out["required"] = node.pop("required")
-    elif t == "array":
-        if "items" in node:
-            out["items"] = to_structured_schema(node.pop("items"))
-        if node.get("minItems") in (0, 1):
-            out["minItems"] = node.pop("minItems")
-    if node:  # unsupported keywords become a hint in the description
-        hint = "{" + ", ".join(f"{k}: {v}" for k, v in node.items()) + "}"
-        out["description"] = (out.get("description", "") + "\n\n" + hint).strip()
-    return out
-
-
-PLAN_SCHEMA = to_structured_schema(PLAN_SCHEMA_RAW)
+# The schema is given to Sonnet as text in the system prompt. It is not used as a constrained-output grammar:
+# with 12 scene types in anyOf the API rejects it ("compiled grammar is too large").
+PLAN_SCHEMA_TEXT = json.dumps(PLAN_SCHEMA_RAW, ensure_ascii=False, separators=(",", ":"))
 
 # --------------------------------------------------------------------------
 # Validation
