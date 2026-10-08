@@ -5,14 +5,14 @@
   "compatibility_date": "2026-10-01",
   "observability": { "enabled": true },
 
-  // Render container: Python + matplotlib + ffmpeg. standard-2 = 1 vCPU, 6 GiB.
-  // One vCPU renders about 1 second of video per second.
+  // Render container: Python + matplotlib + ffmpeg. standard-3 = 2 vCPU, 8 GiB.
+  // Full gen renders scenes in parallel, one per vCPU.
   "containers": [
     {
       "class_name": "Renderer",
       "image": "./container/Dockerfile",
       "image_build_context": "./container",
-      "instance_type": "standard-2",
+      "instance_type": "standard-3",
       "max_instances": 6
     }
   ],
@@ -38,6 +38,9 @@
     "BOT_LANG": "ru",
     "RENDER_INSTANCES": "2",
     // "1" = write the error reason into the Discord message. Set to "0" when the bot works.
-    "DEBUG_ERRORS": "1"
+    "DEBUG_ERRORS": "1",
+    // "1" = Sonnet writes the animation code for each video (with test frames and review); "0" = templates only.
+    "FULL_GEN": "1",
+    "REVIEW_ROUNDS": "2"
   }
 }

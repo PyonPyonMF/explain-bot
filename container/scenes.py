@@ -507,12 +507,9 @@ def draw_frame(fig, s, x, subs, t, T):
     draw_subtitles(c, subs, t)
 
 
-def render_scene(args):
-    """Render one scene with its audio to an MP4 segment. Runs in a worker process."""
-    s, audio_path, audio_len, out_path, first, last, crf = args
-    T = scene_duration(audio_len)
-    x = RENDERERS[s["type"]][0](s)
-    subs = build_subtitles(s["narration"], audio_len)
+def encode_scene(draw, T, audio_path, out_path, first, last, crf):
+    """Render frames with draw(fig, t) and encode them with the scene audio into one MP4 segment.
+    Used by the template renderer and by the full-gen harness."""
     n = int(round(T * FPS))
     vf = []
     if first:
@@ -536,7 +533,7 @@ def render_scene(args):
     p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     try:
         for i in range(n):
-            draw_frame(fig, s, x, subs, i / FPS, T)
+            draw(fig, i / FPS)
             fig.canvas.draw()
             p.stdin.write(fig.canvas.buffer_rgba().tobytes())
     finally:
@@ -544,5 +541,14 @@ def render_scene(args):
         rc = p.wait()
         plt.close(fig)
     if rc != 0:
-        raise RuntimeError(f"ffmpeg failed for scene {s['type']} (code {rc})")
+        raise RuntimeError(f"ffmpeg failed (code {rc})")
     return out_path, T
+
+
+def render_scene(args):
+    """Render one template scene with its audio to an MP4 segment. Runs in a worker process."""
+    s, audio_path, audio_len, out_path, first, last, crf = args
+    T = scene_duration(audio_len)
+    x = RENDERERS[s["type"]][0](s)
+    subs = build_subtitles(s["narration"], audio_len)
+    return encode_scene(lambda fig, t: draw_frame(fig, s, x, subs, t, T), T, audio_path, out_path, first, last, crf)

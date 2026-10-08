@@ -29,6 +29,8 @@ export interface Env {
   BOT_LANG: string;
   RENDER_INSTANCES: string;
   DEBUG_ERRORS: string;
+  FULL_GEN: string;
+  REVIEW_ROUNDS: string;
 }
 
 export class Renderer extends Container<Env> {
@@ -49,6 +51,8 @@ export class Renderer extends Container<Env> {
       MAX_UPLOAD_MB: env.MAX_UPLOAD_MB ?? "",
       BOT_LANG: env.BOT_LANG ?? "",
       DEBUG_ERRORS: env.DEBUG_ERRORS ?? "",
+      FULL_GEN: env.FULL_GEN ?? "1",
+      REVIEW_ROUNDS: env.REVIEW_ROUNDS ?? "2",
       CODE_VERSION: env.CF_VERSION_METADATA?.id ?? "",
       DISCORD_BOT_TOKEN: env.DISCORD_BOT_TOKEN ?? "",
     };

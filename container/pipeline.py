@@ -31,10 +31,14 @@ DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
            "refused": "⚠️ Не буду это объяснять: {}", "bad_plan": "⚠️ Модель вернула неправильный план видео. Попробуй ещё раз.",
-           "too_big": "⚠️ Видео получилось слишком большим для Discord."},
+           "too_big": "⚠️ Видео получилось слишком большим для Discord.",
+           "p_write": "✍️ Пишу сценарий и анимацию…", "p_review": "🔎 Проверяю кадры (раунд {})…",
+           "p_render": "🎬 Рендерю видео…"},
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
            "refused": "⚠️ I will not explain this: {}", "bad_plan": "⚠️ The model returned an invalid video plan. Try again.",
-           "too_big": "⚠️ The video is too large for Discord."},
+           "too_big": "⚠️ The video is too large for Discord.",
+           "p_write": "✍️ Writing the script and the animation…", "p_review": "🔎 Checking frames (round {})…",
+           "p_render": "🎬 Rendering the video…"},
 }
 S = STRINGS.get(BOT_LANG, STRINGS["en"])
 
@@ -244,6 +248,11 @@ def render_all(plan, audio, workdir):
     else:
         with cf.ProcessPoolExecutor(max_workers=cpus, mp_context=mp.get_context("forkserver")) as ex:
             results = list(ex.map(render_scene, tasks))
+    return concat_and_fit(results, workdir)
+
+
+def concat_and_fit(results, workdir):
+    """Join scene segments [(path, seconds)] and re-encode if the file is larger than MAX_UPLOAD_MB."""
     lst = os.path.join(workdir, "list.txt")
     with open(lst, "w") as f:
         for p, _ in results:
@@ -312,8 +321,17 @@ def discord_video(job, path, title):
 def handle_job(job):
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
-        path, plan = make_video(job, workdir)
-        discord_video(job, path, plan["title"])
+        path, title = None, None
+        if os.environ.get("FULL_GEN", "1") == "1":
+            from fullgen import FullGenFailed, make_video_fullgen
+            try:
+                path, title = make_video_fullgen(job, workdir, lambda msg: _safe_text(job, msg))
+            except FullGenFailed as e:
+                log.warning("full gen failed, using templates: %s", e)
+        if not path:
+            path, plan = make_video(job, workdir)
+            title = plan["title"]
+        discord_video(job, path, title)
     except UserError as e:
         log.info("user error: %s", e)
         _safe_text(job, str(e))

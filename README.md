@@ -30,15 +30,21 @@ Discord ──► Worker (src/index.ts)
               ctx.waitUntil: POST job to the container ──► returns 202 at once
                                      │
               Container (container/, Python, Cloudflare Containers)
-                1. Sonnet (claude-sonnet-5-5): JSON scene plan (schema in the prompt; reply validated, one retry)
-                2. plan.py: strict validation; every chart number is computed by code, not by the model
-                3. ElevenLabs: one MP3 per scene (previous_text/next_text keep the voice continuous)
-                4. scenes.py: matplotlib frames → ffmpeg, each scene as long as its voice clip
-                5. PATCH the original Discord response with the MP4 (interaction token, valid 15 min)
+                inputs.py   post text, images, linked pages, files, reply + earlier messages
+                fullgen.py  (FULL_GEN=1, default)
+                  1. Sonnet writes the narration plan AND a Python module that draws every frame (kit.py API)
+                  2. ElevenLabs voices each scene (in parallel with 3–4)
+                  3. gen_harness.py renders 2 test frames per scene as user `sandbox` (no API keys) and checks
+                     them: crashes, text outside the frame / in the subtitle band, overlapping text, slow frames
+                  4. Sonnet looks at the frames and returns fixed code (max REVIEW_ROUNDS rounds, 7 min budget)
+                  5. full render, one scene per vCPU; a scene that crashes becomes a text card
+                pipeline.py templates (fallback when the generated code never runs, or FULL_GEN=0)
+                  12 fixed scene types filled from a JSON plan
+                → PATCH the original Discord response with the MP4 (progress messages while it works)
 ```
 
-Scene types: `title, statement, bullets, flow, compare, formula, plot, gradient_descent, neuron, vectors, bars, summary`.
-Sonnet only chooses scenes and writes text. It cannot run code, so a bad plan cannot break the container.
+Generated code runs as an unprivileged user without the API keys in its environment; it cannot read the
+server's environment or write to /app. It still has network access.
 
 ## Deploy with Workers Builds (no Docker on your computer)
 
@@ -79,14 +85,17 @@ Cloudflare builds the container image from `container/Dockerfile` on each push t
 | `MAX_UPLOAD_MB` | `9.5` | target file size; larger videos are re-encoded |
 | `BOT_LANG` | `ru` | language of the bot's own status messages (`ru`/`en`) |
 | `RENDER_INSTANCES` | `2` | how many container instances share the jobs |
+| `FULL_GEN` | `1` | `1` = generated animation with review; `0` = templates only (faster, cheaper) |
+| `REVIEW_ROUNDS` | `2` | max review rounds (each: test frames → Sonnet with images → fixed code) |
 
-Container size: `standard-2` (1 vCPU, 6 GiB). One vCPU renders about 1 second of video per second
-(tested: 48 s of video in 48 s). Change `instance_type` to `standard-3` for 2× speed.
+Container size: `standard-3` (2 vCPU, 8 GiB). A full-gen job takes about 4–8 minutes: generation 1–2 min,
+each review round 1–2 min, render 1–2 min. Discord allows 15 minutes.
 
 ## Cost per video (approximate)
 
 - ElevenLabs: about 1 credit per character; narration is capped at 1600 characters.
-- Sonnet: one call, about 10 k input + 2 k output tokens.
+- Sonnet (full gen): 1 generation call (about 8–12 k output tokens of code) + up to 2 review calls with
+  images (about 15 k input + 8 k output each). Templates only: one call, about 10 k input + 2 k output.
 - Container: about 1–2 vCPU-minutes. Workers Paid includes 375 vCPU-minutes per month.
   The instance stays up to 15 min after a job (`sleepAfter`), billed for memory while it runs.
 
