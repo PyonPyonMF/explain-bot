@@ -58,8 +58,9 @@ Rules:
   No \\text, no \\begin, no \\left/\\right.
 - Expressions for "plot" and "gradient_descent" use x as the variable, with + - * / ^ and the listed functions only.
   For gradient_descent pick a learning rate that converges visibly in the given number of steps.
-- Input can contain: <request> (what the user asked), <post> (the Discord message to explain), <replied_to> (the message
-  that post answers), <conversation_before> (earlier messages, oldest first), <attachment>, <linked_page>, and images.
+- Input can contain: <request> (what the user asked), <post> (the Discord message to explain), <replied_to> (reply
+  ancestors, oldest first), <conversation_before> (discussion before the user's request, oldest first), <attachment>,
+  <linked_page>, and images. The discussion can include responses made after the target post.
   Explain the post or request IN THAT CONTEXT: what is said, what it refers to, who claims what, what is true.
   Describe what matters in the images (a screenshot, a chart, a meme) and use the linked pages as sources.
   If a <question> is given, answer that question about the post.
@@ -290,13 +291,21 @@ def make_video(job, workdir):
 
 # --------------------------------------------------------------- Discord
 def _discord_url(job):
+    if job.get("response_message_id"):
+        return f"{DISCORD_BASE}/channels/{job['response_channel_id']}/messages/{job['response_message_id']}"
     return f"{DISCORD_BASE}/webhooks/{job['application_id']}/{job['token']}/messages/@original"
+
+
+def _discord_headers(job, content_type):
+    headers = {"content-type": content_type, "user-agent": "DiscordBot (explain-bot, 1.0)"}
+    if job.get("response_message_id"):
+        headers["authorization"] = "Bot " + os.environ["DISCORD_BOT_TOKEN"]
+    return headers
 
 
 def discord_text(job, content):
     body = json.dumps({"content": content[:1900], "allowed_mentions": {"parse": []}}).encode()
-    _retry(lambda: _http(_discord_url(job), body, {"content-type": "application/json",
-                                                   "user-agent": "DiscordBot (explain-bot, 1.0)"}, method="PATCH"),
+    _retry(lambda: _http(_discord_url(job), body, _discord_headers(job, "application/json"), method="PATCH"),
            "discord")
 
 
@@ -315,7 +324,7 @@ def discord_video(job, path, title, debug=""):
         f"--{boundary}--\r\n".encode(),
     ]
     body = b"".join(parts)
-    headers = {"content-type": f"multipart/form-data; boundary={boundary}", "user-agent": "DiscordBot (explain-bot, 1.0)"}
+    headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
     _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
 
 

@@ -1,5 +1,6 @@
 """Gateway command flow tests; no network, tokens, or paid API calls."""
 import json
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import tempfile
@@ -20,6 +21,18 @@ def interaction(data, kind=discord.InteractionType.application_command):
     )
 
 
+def message(content="<@999> explain this", mid=300, reference=None):
+    msg = Mock(spec=discord.Message)
+    msg.id, msg.content, msg.reference = mid, content, reference
+    msg.created_at = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    msg.author = SimpleNamespace(id=42, name="Reader", global_name="Reader", bot=False)
+    msg.channel = SimpleNamespace(id=789, fetch_message=AsyncMock())
+    msg.attachments, msg.embeds, msg.message_snapshots = [], [], []
+    msg.webhook_id = None
+    msg.reply = AsyncMock(return_value=SimpleNamespace(id=400, edit=AsyncMock()))
+    return msg
+
+
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.env = patch.dict(os.environ, {"DAILY_LIMIT": "5", "BOT_LANG": "ru", "MAX_QUEUED_JOBS": "1"})
@@ -28,6 +41,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.old_state = I._state
         I._state = I.State(str(Path(self.tmp.name) / "bot.sqlite"))
         self.bot = gateway.ExplainBot("test-token")
+        self.bot._connection.user = SimpleNamespace(id=999)
         self.submit = Mock()
         self.bot.renderer.submit = self.submit
 
@@ -114,6 +128,113 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(gateway, "bot_request", return_value={"id": "456"}), patch.object(gateway, "register_commands") as register:
             await self.bot.setup_hook()
             register.assert_called_once_with("test-token", "456")
+
+    async def test_mention_acknowledged_before_render_with_channel_delivery(self):
+        msg = message("<@!999> explain gradients")
+        self.submit.side_effect = lambda *args: msg.reply.assert_awaited_once()
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["text"], "explain gradients")
+        self.assertEqual(job["kind"], "query")
+        self.assertEqual(job["context_before_id"], "300")
+        self.assertEqual(job["response_message_id"], "400")
+        self.assertEqual(job["response_channel_id"], "789")
+        self.assertNotIn("token", job)
+        self.assertFalse(msg.reply.call_args.kwargs["mention_author"])
+        self.assertEqual(msg.reply.call_args.kwargs["allowed_mentions"].to_dict()["parse"], [])
+        self.assertTrue(self.bot.intents.guild_messages and self.bot.intents.message_content)
+
+    async def test_mention_reply_uses_quoted_post_and_question(self):
+        target = message("A claim about gradients", mid=200)
+        target.author = SimpleNamespace(name="Original author", global_name=None)
+        target.attachments = [SimpleNamespace(to_dict=lambda: {"url": "https://example.com/a.png", "content_type": "image/png"})]
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> кто тут прав?", reference=ref)
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual((job["kind"], job["question"]), ("message", "кто тут прав?"))
+        self.assertEqual(job["message"]["content"], target.content)
+        self.assertEqual(job["message"]["author"]["username"], "Original author")
+        self.assertEqual(job["message"]["attachments"][0]["content_type"], "image/png")
+        self.assertEqual((job["message"]["id"], job["context_before_id"]), ("200", "300"))
+        msg.channel.fetch_message.assert_not_awaited()
+
+    async def test_uncached_reply_fetched(self):
+        msg = message(reference=discord.MessageReference(message_id=200, channel_id=789))
+        msg.channel.fetch_message.return_value = message("quoted text", mid=200)
+        await self.bot.on_message(msg)
+        msg.channel.fetch_message.assert_awaited_once_with(200)
+        self.assertEqual(self.submit.call_args.args[1]["message"]["content"], "quoted text")
+
+    async def test_deleted_reply_does_not_generate_wrong_video(self):
+        msg = message(reference=discord.MessageReference(message_id=200, channel_id=789))
+        msg.channel.fetch_message.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "gone")
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.assertIn("цитируемое", msg.reply.call_args.args[0])
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+
+    async def test_forwarded_snapshot_without_accessing_source_channel(self):
+        msg = message("<@999> что это значит?", reference=discord.MessageReference(
+            message_id=123, channel_id=456, type=discord.MessageReferenceType.forward))
+        msg.message_snapshots = [SimpleNamespace(content="Forwarded claim", created_at=msg.created_at, attachments=[], embeds=[])]
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["message"]["content"], "Forwarded claim")
+        self.assertEqual(job["message"]["id"], "300")
+        self.assertEqual(job["channel_id"], "789")
+        msg.channel.fetch_message.assert_not_awaited()
+
+    async def test_plain_mention_explains_recent_conversation(self):
+        msg = message("<@999>")
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertIn("обсуждают", job["text"])
+        self.assertEqual(job["context_messages"], 10)
+
+    async def test_ignore_bots_and_non_mentions(self):
+        messages = [message("hello"), message("@everyone"), message("<@123>"), message()]
+        messages[-1].author.bot = True
+        for msg in messages:
+            await self.bot.on_message(msg)
+            msg.reply.assert_not_awaited()
+        self.submit.assert_not_called()
+
+    async def test_duplicate_message_event_only_enqueues_once(self):
+        msg = message()
+        await self.bot.on_message(msg)
+        await self.bot.on_message(msg)
+        self.submit.assert_called_once()
+        msg.reply.assert_awaited_once()
+
+    async def test_mentions_share_quota_with_slash_commands(self):
+        with patch.dict(os.environ, {"DAILY_LIMIT": "1"}):
+            i = interaction({"type": 1, "options": [{"name": "query", "value": "x"}]})
+            await self.bot.on_interaction(i)
+            msg = message()
+            await self.bot.on_message(msg)
+        self.submit.assert_called_once()
+        self.assertIn("Лимит", msg.reply.call_args.args[0])
+
+    async def test_full_mention_queue_does_not_consume_quota(self):
+        for _ in range(2):
+            self.bot.slots.acquire()
+        msg = message()
+        await self.bot.on_message(msg)
+        self.assertIn("занят", msg.reply.call_args.args[0])
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+        self.submit.assert_not_called()
+
+    async def test_failed_mention_ack_releases_capacity(self):
+        msg = message()
+        msg.reply.side_effect = [RuntimeError("send failed"), SimpleNamespace(id=400)]
+        with self.assertLogs("gateway", level="ERROR"):
+            await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
 
 
 class ConfigurationTests(unittest.TestCase):

@@ -186,6 +186,24 @@ def _history(channel_id, before=None, limit=10):
     return list(reversed(msgs))  # oldest first
 
 
+def _reply_chain(msg, channel_id):
+    """Follow at most four ancestors, only inside the channel the user invoked us in."""
+    seen, parents = {str(msg.get("id"))}, []
+    for _ in range(4):
+        reference = msg.get("message_reference") or {}
+        ref_id = reference.get("message_id")
+        if (not ref_id or str(ref_id) in seen or reference.get("type") == 1
+                or str(reference.get("channel_id") or channel_id) != str(channel_id)):
+            break
+        seen.add(str(ref_id))
+        parent = msg.get("referenced_message") or _discord_get(f"/channels/{channel_id}/messages/{ref_id}")
+        if not parent:
+            break
+        parents.append(parent)
+        msg = parent
+    return list(reversed(parents))
+
+
 # --------------------------------------------------------------- build
 def collect(job):
     """Return (content_blocks, notes). content_blocks go into the user message; images come first."""
@@ -194,19 +212,26 @@ def collect(job):
     channel_id = job.get("channel_id")
 
     # 1. conversation context (needs DISCORD_BOT_TOKEN, bot in the server, Message Content intent)
-    n_ctx = int(job.get("context_messages") or 0)
-    ctx_lines = []
+    n_ctx = max(0, min(50, int(job.get("context_messages", 10 if job.get("kind") == "message" else 0) or 0)))
+    history, parents = [], []
     if job.get("kind") == "message" and msg.get("id"):
-        ref_id = (msg.get("message_reference") or {}).get("message_id")
-        ref = msg.get("referenced_message") or (ref_id and _discord_get(f"/channels/{channel_id}/messages/{ref_id}"))
-        if ref:
-            texts.append("<replied_to>\n" + _one_line(ref, 1500) + "\n</replied_to>")
-        before = _history(channel_id, before=msg["id"], limit=n_ctx or 10)
-        ctx_lines = [_one_line(m) for m in before]
-    elif n_ctx > 0:
-        ctx_lines = [_one_line(m) for m in _history(channel_id, limit=n_ctx)]
-        if not ctx_lines:
+        parents = _reply_chain(msg, channel_id)
+        if parents:
+            texts.append("<replied_to oldest_first=\"true\">\n" + "\n".join(_one_line(m, 1500) for m in parents) + "\n</replied_to>")
+        history = _history(channel_id, before=msg["id"], limit=n_ctx)
+    anchor = job.get("context_before_id")
+    if n_ctx > 0 and (job.get("kind") != "message" or (anchor and str(anchor) != str(msg.get("id")))):
+        # Freeze the boundary at the mention, even if rendering starts much later.
+        history += _history(channel_id, before=anchor, limit=n_ctx)
+        if not history:
             notes.append("context")
+    unique = {}
+    for item in history:
+        key = str(item.get("id"))
+        if key == str(msg.get("id")) or (job.get("bot_user_id") and str((item.get("author") or {}).get("id")) == job["bot_user_id"]):
+            continue
+        unique[key] = item
+    ctx_lines = [_one_line(m) for m in unique.values()]
     if ctx_lines:
         ctx = "\n".join(ctx_lines)[-MAX_CONTEXT_CHARS:]
         texts.append(f"<conversation_before oldest_first=\"true\">\n{ctx}\n</conversation_before>")
@@ -221,8 +246,12 @@ def collect(job):
             body += "\n[embeds]\n" + "\n".join(emb)
         texts.append(f"<post author=\"{_author(msg)}\">\n{body or '[no text]'}\n</post>")
 
-    # 3. attachments: images and small text files
-    for a in (msg.get("attachments") or []):
+    # 3. attachments: also retain media from the question and the quoted reply chain.
+    # Keep the same total bounds as one post, with the target taking priority.
+    sources = [msg, job.get("request_message") or {}, *reversed(parents)]
+    attachments = [a for source in sources for a in source.get("attachments") or []][:10]
+    embeds = [e for source in sources for e in source.get("embeds") or []][:5]
+    for a in attachments:
         ctype = (a.get("content_type") or "").lower()
         name = a.get("filename") or "file"
         url = a.get("url") or a.get("proxy_url")
@@ -241,7 +270,7 @@ def collect(job):
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype or '?'}\">[not read]</attachment>")
         except Exception as e:
             log.warning("attachment %s skipped: %s", name, e)
-    for e in (msg.get("embeds") or []):  # images in link previews / image embeds
+    for e in embeds:  # images in link previews / image embeds
         for key in ("image", "thumbnail"):
             u = (e.get(key) or {}).get("url")
             if u and len(images) < MAX_IMAGES:
@@ -255,7 +284,7 @@ def collect(job):
                     log.warning("embed image skipped: %s", ex)
 
     # 4. linked pages (from the post, or from the query)
-    source = (msg.get("content") or "") + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
+    source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
     urls = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
     for u in urls:
         try:

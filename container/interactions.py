@@ -151,7 +151,8 @@ def trim_message(m, depth=0):
                     "image": {"url": e["image"]["url"]} if (e.get("image") or {}).get("url") else None,
                     "thumbnail": {"url": e["thumbnail"]["url"]} if (e.get("thumbnail") or {}).get("url") else None}
                    for e in (m.get("embeds") or [])[:5]],
-        "message_reference": {"message_id": m["message_reference"].get("message_id")} if m.get("message_reference") else None,
+        "message_reference": {k: m["message_reference"].get(k) for k in ("message_id", "channel_id", "type")}
+        if m.get("message_reference") else None,
         "referenced_message": trim_message(m.get("referenced_message"), 1) if depth == 0 else None,
     }
 

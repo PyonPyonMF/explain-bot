@@ -7,6 +7,11 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   With `private`, only you see the video.
 - Right-click a message → **Apps → Explain (video)**: explains that post.
 - Right-click a message → **Apps → Ask about this (video)**: opens a form for your question, then explains the post.
+- In Gateway mode, `@BigBro объясни градиентный спуск` makes a video directly in the channel.
+  Reply to a post with `@BigBro кто тут прав?` to explain that post in context, including its images, links,
+  up to four parent replies, and recent discussion. A plain mention explains the recent conversation.
+  Pasted quotes and forwarded posts are also supported. The bot replies with progress, then attaches the video
+  to that same reply; it ignores other bots and does not ping participants.
 
 For a post, the bot reads: the text, images (up to 4), link previews, small text files (`.txt`, `.py`, …),
 the pages behind links (up to 3), the message it replies to, and the 10 messages before it.
@@ -63,8 +68,11 @@ In Discord Developer Portal, clear **General Information → Interactions Endpoi
 Discord sends commands either to that URL or to the Gateway, never to both
 ([Discord documentation](https://docs.discord.com/developers/interactions/receiving-and-responding#receiving-an-interaction)).
 Add the bot to your server with scopes `bot` and `applications.commands`, and permissions
-*View Channels* and *Read Message History*. Enable **Bot → Message Content Intent** if you want it to read
-earlier messages as context. No privileged Gateway intents are requested just to receive commands.
+*View Channels*, *Read Message History*, *Send Messages*, *Attach Files*, and *Send Messages in Threads*
+where needed. Enable **Bot → Message Content Intent** for mentions, quoted posts, and conversation context.
+Set `ENABLE_MENTIONS=0` to use only slash/context commands without requesting Message Content intent.
+`MENTION_CONTEXT_MESSAGES` defaults to 10: replies include that many messages before the quoted post and
+before the mention, with duplicates removed. Messages sent after the mention are not included.
 
 Commands are registered automatically at startup; set `REGISTER_COMMANDS=0` to skip registration.
 Run only one Gateway instance for this bot token. The renderer processes one video at a time, with
