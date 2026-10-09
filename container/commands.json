@@ -36,6 +36,18 @@
     ]
   },
   {
+    "type": 1,
+    "name": "objects",
+    "name_localizations": { "ru": "объекты" },
+    "description": "Browse reusable 3D objects",
+    "description_localizations": { "ru": "Найти объект в 3D-библиотеке" },
+    "integration_types": [0, 1],
+    "contexts": [0, 1, 2],
+    "options": [{ "type": 3, "name": "query", "name_localizations": { "ru": "поиск" },
+      "description": "Object name or topic", "description_localizations": { "ru": "Название объекта или тема" },
+      "required": false, "max_length": 200 }]
+  },
+  {
     "type": 3,
     "name": "Explain (video)",
     "name_localizations": { "ru": "Объяснить (видео)" },

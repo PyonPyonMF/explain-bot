@@ -248,6 +248,19 @@ class ExplainBot(discord.Client):
             code, response = await asyncio.to_thread(I.handle, payload(interaction), reserve)
             if code != 200:
                 response = {"type": I.CHANNEL_MESSAGE, "data": {"content": "Unsupported command.", "flags": I.EPHEMERAL}}
+            if (interaction.data or {}).get("name") == "objects":
+                query = str(I._option(payload(interaction), "query") or "")[:200]
+                if query:
+                    from object_library import search
+                    matches = await asyncio.to_thread(search, query, 2)
+                    if len(matches) == 1 and matches[0].get("preview") and Path(matches[0]["preview"]).is_file():
+                        file = discord.File(matches[0]["preview"], filename="object-preview.png")
+                        try:
+                            await interaction.response.send_message(response["data"]["content"], file=file,
+                                ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                        finally:
+                            file.close()
+                        return
             await respond(interaction, response)
             for job in reserved[:]:
                 self.renderer.submit(self.render, job)

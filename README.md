@@ -27,7 +27,9 @@ Source links/credits accompany the finished video, and generated illustrations a
 Use `@BigBro 3d объясни, почему маятник качается` or `/explain query:... mode:3d`.
 Replies/quoted posts keep their conversation context in 3D mode too. Normal requests stay in 2D.
 
-Blender builds a real classroom with a board, narrated scene changes, and animated 3D demonstration objects.
+Blender builds a Japanese school classroom with timber flooring, windows, a chalkboard, and wooden desks.
+Lessons use perspective cameras: an eye-level presenter close-up, a close-up of the object, and readable
+board inserts, with narrated scene changes and animated 3D demonstration objects.
 The board can show text and the image references prepared for the explanation. The scene planner chooses
 meaningful models/diagrams for the topic rather than treating every object as the same primitive.
 For detailed real-world objects, add a GLB/GLTF model to the local catalog so the renderer can use its actual
@@ -48,12 +50,95 @@ Optional `models3d/catalog.json`:
 ]
 ```
 
+### Reusable 3D object library
+
+`/objects` (Russian UI: `/объекты`) lists stored objects. Use `query` / `поиск` to search by name, topic,
+or Russian/English tags. An exact single match includes its preview. Browsing is private and does not
+consume the video quota.
+
+The bot searches this catalog before building a 3D lesson. New reusable objects declared by the scene
+generator are captured only after the video renders successfully. Each entry stores a standalone GLB,
+an object-only thumbnail, a description, tags, named components, attribution, and reuse count. The room,
+avatar, board, lesson-specific text and executable lesson code are not included. Future lessons reuse the
+geometry and animate its named parts with their own timing and narration.
+
+The persistent `library3d/` directory is mounted separately from the read-only `models3d/` directory and
+is excluded from Git. Only the trusted bot process updates the SQLite catalog and publishes assets;
+the renderer can read published models but cannot modify them. Models are normalized to stand on Z=0,
+centered on X/Y, with their largest dimension equal to one. Parent/pivot relationships are retained.
+
+Identical files or equivalent geometry/material fingerprints are deduplicated. Changed objects receive
+a new ID rather than overwriting a version already referenced by other lessons. Archiving hides an object
+from future selection while preserving its files. Default limits: 500 objects and 512 MiB of model data;
+reaching a library limit does not discard the video.
+
+Operator commands:
+
+```bash
+docker compose -f compose.gateway.yml exec bot python -m object_library list маятник
+docker compose -f compose.gateway.yml exec bot python -m object_library import /models3d/microscope.glb --id microscope --title "Microscope" --description "Optical microscope" --tags "microscope,микроскоп" --credit "Creator" --license "License" --source-url "https://example.com/model"
+docker compose -f compose.gateway.yml exec bot python -m object_library archive microscope
+docker compose -f compose.gateway.yml exec bot python -m object_library restore microscope
+```
+
+Imported library GLBs must embed their buffers/textures. The manual `models3d/catalog.json` catalog remains
+supported. `OBJECT_LIBRARY_AUTO_SAVE=0` disables automatic additions; `OBJECT_LIBRARY_MAX_ASSETS` and
+`OBJECT_LIBRARY_MAX_MB` set storage limits. Include `library3d/` when backing up the deployment.
+
 The CPU profile uses Blender Workbench with textures, studio shading and FXAA, 960×540 at 8 rendered FPS
 (encoded as 24 FPS). `THREED_ENGINE=BLENDER_EEVEE_NEXT` enables more advanced lighting at a higher render
 cost. `THREED_FPS`, `THREED_WIDTH`, `THREED_HEIGHT`, `THREED_SAMPLES`, `THREED_MAX_SECONDS` and
 `THREED_RENDER_TIMEOUT` are configurable. Lessons are intentionally short (two or three scenes). A 3D
 failure is reported as a failure; it is not silently replaced by a 2D clip. Generated Blender code runs as
 the unprivileged sandbox user with API credentials removed, with auto-execution from model files disabled.
+
+### Optional Windows GPU worker
+
+With `THREED_REMOTE=1`, an available personal computer renders 1080p Eevee scenes with 32 samples, soft
+lighting and depth of field. The default is 12 rendered FPS, encoded at 24 FPS; `THREED_REMOTE_FPS` can be
+increased to 24 at roughly twice the render time. A disconnected, busy, restarted or failed worker falls
+back to the server's Workbench profile. The remote deadline is `THREED_REMOTE_TIMEOUT` (600 seconds).
+The bot announces which renderer is being used. Only one local GPU worker should use this queue.
+
+The server builds and bakes self-contained `.blend` files, including textures, gestures, lip movement,
+object animation and camera framing. Windows runs the trusted renderer with `--disable-autoexec`; it does
+not execute generated lesson Python and needs no VRM add-on or Discord/AI API credentials. It returns
+silent H.264 clips; the server adds narration/subtitles and updates the object library. Job files are
+removed afterwards. Logs contain job IDs, status and errors rather than message text.
+
+Requirements: Blender 4.3+ or 5.x, Python 3.10+, Windows OpenSSH client, and Tailscale on both machines.
+Generate a dedicated Ed25519 key under `%LOCALAPPDATA%\ExplainBotRender\worker_key` and copy **only its
+public key** to codervm. On the server run:
+
+```bash
+sudo python3 scripts/install_render_transport.py /path/to/worker_key.pub
+```
+
+This installs a dedicated `bot-render` account and an SSH broker on port 2222 bound **only** to the server's
+Tailscale address. It accepts the render protocol, with shell access, TTY and forwarding disabled. This
+separate listener is necessary when Tailscale SSH owns port 22 and bypasses OpenSSH authorized-key rules.
+Set the printed `THREED_WORKER_UID`/`THREED_WORKER_GID` in `.env`, set `THREED_REMOTE=1`, and rebuild the bot.
+The private queue is mounted at `/render-queue`, separately from bot secrets and library storage.
+
+On Windows, obtain `/etc/ssh/ssh_host_ed25519_key.pub` through an already trusted connection and save
+`[codervm]:2222 <host-public-key>` in `%LOCALAPPDATA%\ExplainBotRender\known_hosts`. In the same directory,
+create `config.json` (adjust Blender's path to the installed version):
+
+```json
+{
+  "host": "bot-render@codervm", "port": 2222,
+  "key": "C:/Users/user/AppData/Local/ExplainBotRender/worker_key",
+  "known_hosts": "C:/Users/user/AppData/Local/ExplainBotRender/known_hosts",
+  "blender": "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe",
+  "work": "C:/Users/user/AppData/Local/ExplainBotRender/work"
+}
+```
+
+Run `scripts/install_windows_worker.ps1`. The `ExplainBot-3D-Worker` scheduled task starts immediately
+and at Windows login, without opening console windows. The computer must be awake, signed in and connected
+to Tailscale. Use `Stop-ScheduledTask` / `Start-ScheduledTask -TaskName ExplainBot-3D-Worker` to pause/resume;
+rerun the installer after worker code updates. Diagnostics: `work/worker.log`, `work/last-blender.log`, and
+`journalctl -u explain-bot-render-sshd` on codervm. Do not commit the private key or local worker config.
 
 For a post, the bot reads: the text, images (up to 4), link previews, small text files (`.txt`, `.py`, …),
 the pages behind links (up to 3), the message it replies to, and the 10 messages before it.

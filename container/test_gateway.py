@@ -210,6 +210,28 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.submit.call_args.args[1]["render_mode"], "3d")
         i.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
 
+    async def test_object_library_browse_does_not_render_or_consume_quota(self):
+        i=interaction({"type":1,"name":"objects","options":[{"name":"query","value":"маятник"}]})
+        with patch("object_library.describe",return_value="Found pendulum") as describe:
+            await self.bot.on_interaction(i)
+        describe.assert_called_once_with("маятник")
+        i.response.send_message.assert_awaited_once()
+        self.assertTrue(i.response.send_message.call_args.kwargs["ephemeral"])
+        self.submit.assert_not_called()
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0],0)
+
+    async def test_single_object_search_attaches_private_preview(self):
+        preview=Path(self.tmp.name)/"preview.png"
+        preview.write_bytes(b'\x89PNG\r\n\x1a\n')
+        i=interaction({"type":1,"name":"objects","options":[{"name":"query","value":"маятник"}]})
+        with patch("object_library.describe",return_value="Маятник"), patch("object_library.search",return_value=[{"preview":str(preview)}]):
+            await self.bot.on_interaction(i)
+        sent=i.response.send_message.call_args.kwargs
+        self.assertTrue(sent["ephemeral"])
+        self.assertEqual(sent["file"].filename,"object-preview.png")
+        self.assertTrue(sent["file"].fp.closed)
+        self.submit.assert_not_called()
+
     async def test_ignore_bots_and_non_mentions(self):
         messages = [message("hello"), message("@everyone"), message("<@123>"), message()]
         messages[-1].author.bot = True
@@ -258,7 +280,7 @@ class ConfigurationTests(unittest.TestCase):
         with patch.object(gateway, "bot_request") as request:
             gateway.register_commands("test-token", "456")
         commands = request.call_args.args[2]
-        self.assertEqual({c["name"] for c in commands}, {"explain", "Explain (video)", I.ASK_COMMAND})
+        self.assertEqual({c["name"] for c in commands}, {"explain", "objects", "Explain (video)", I.ASK_COMMAND})
         self.assertTrue(all(c["integration_types"] == [0] and c["contexts"] == [0, 1] for c in commands))
         original = json.loads(Path(gateway.__file__).with_name("commands.json").read_text())
         self.assertEqual(original[0]["integration_types"], [0, 1])

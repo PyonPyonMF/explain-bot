@@ -190,6 +190,9 @@ def handle(i, enqueue):
     d = i.get("data") or {}
     if t == PING:
         return _reply({"type": PONG})
+    if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "objects":
+        from object_library import describe
+        return _ephemeral(describe(str(_option(i, "query") or "")[:200]))
 
     if t == APPLICATION_COMMAND and d.get("type") == MESSAGE_COMMAND and d.get("name") == ASK_COMMAND:
         m = ((d.get("resolved") or {}).get("messages") or {}).get(d.get("target_id"))

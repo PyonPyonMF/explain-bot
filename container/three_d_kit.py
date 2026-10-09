@@ -3,6 +3,8 @@
 This module is imported inside Blender, never in the Discord process.
 """
 import math
+import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import bpy
@@ -16,6 +18,52 @@ WHITE = (0.92, 0.95, 1.0)
 GREEN = (0.18, 0.75, 0.45)
 RED = (0.92, 0.13, 0.19)
 _MODELS = {}
+_USED_MODELS = set()
+_CANDIDATES = []
+_DEMO_COLLECTION = None
+
+
+@contextmanager
+def reusable(key, title, description, tags=()):
+    """Mark only a new object's geometry/parts for reuse, not lesson labels or animations."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,49}", str(key)):
+        raise ValueError("reusable() key must be a short lowercase ASCII identifier")
+    before = set(bpy.data.objects)
+    yield
+    allowed = set(_DEMO_COLLECTION.all_objects) if _DEMO_COLLECTION else set()
+    objects = [obj for obj in set(bpy.data.objects) - before
+               if obj in allowed and obj.type in ("MESH", "CURVE", "SURFACE", "EMPTY")]
+    origins = {obj.get("library_origin_id") for obj in objects}
+    if objects and not (len(origins) == 1 and None not in origins):
+        _CANDIDATES.append({"key":key, "title":title, "description":description, "tags":list(tags), "objects":objects})
+
+
+def pivot(name, location=(0, 0, 0)):
+    obj = bpy.data.objects.new(name, None)
+    bpy.context.collection.objects.link(obj)
+    obj.location = location
+    return obj
+
+
+def part(root, name):
+    for obj in root.children_recursive:
+        if obj.get("library_part") == name or obj.name == name:
+            return obj
+    raise ValueError(f"model part not found: {name}; available: " + ", ".join(parts(root)))
+
+
+def parts(root):
+    return {obj.get("library_part") or obj.name: obj for obj in root.children_recursive}
+
+
+def attach(obj, parent):
+    """Parent an imported part to a new hinge/pivot without moving or resizing it."""
+    bpy.context.view_layer.update()
+    world = obj.matrix_world.copy()
+    obj.parent = parent
+    obj.matrix_parent_inverse = parent.matrix_world.inverted()
+    obj.matrix_world = world
+    return obj
 
 
 def material(name, color, metallic=0.0, roughness=0.45):
@@ -154,6 +202,35 @@ def model(asset_id, location=(0, 0, 0.85), size=1.1):
     if asset_id not in _MODELS:
         raise ValueError("unknown 3D model: " + asset_id)
     before = set(bpy.data.objects)
+    target_collection = _DEMO_COLLECTION or bpy.context.collection
+    camera = bpy.context.scene.camera
     bpy.ops.import_scene.gltf(filepath=_MODELS[asset_id]["path"])
+    bpy.context.scene.camera = camera
     objects = list(set(bpy.data.objects) - before)
-    return normalize(objects, location, max_size=size)
+    bpy.context.view_layer.update()
+    for obj in objects:
+        world = obj.matrix_world.copy()
+        obj.rotation_mode = "XYZ"
+        obj.matrix_world = world
+        obj["library_origin_id"] = asset_id
+        if not obj.get("library_part"):
+            obj["library_part"] = obj.name
+        if obj.type == "MESH":
+            for mat in obj.data.materials:
+                if mat and mat.use_nodes:
+                    shader = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+                    links = shader.inputs["Base Color"].links if shader else []
+                    if links and links[0].from_node.type == "TEX_IMAGE":
+                        mat.node_tree.nodes.active = links[0].from_node
+    root = normalize(objects, location, max_size=size)
+    root["library_origin_id"] = asset_id
+    # glTF may create its own collection. Move every imported part into the demo so
+    # scene cleanup and composite-object capture include it as well as the root.
+    for obj in [*objects, root]:
+        if obj.name not in target_collection.objects:
+            target_collection.objects.link(obj)
+        for collection in list(obj.users_collection):
+            if collection != target_collection:
+                collection.objects.unlink(obj)
+    _USED_MODELS.add(asset_id)
+    return root

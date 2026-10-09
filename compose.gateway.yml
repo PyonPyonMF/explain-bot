@@ -14,6 +14,8 @@ services:
       - ./data:/data
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
       - ./models3d:/models3d:ro
+      - ./library3d:/library3d
+      - ${THREED_QUEUE_HOST:-/var/lib/explain-bot-render/queue}:/render-queue
     logging:
       driver: json-file
       options:
