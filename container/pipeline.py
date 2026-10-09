@@ -357,6 +357,11 @@ def handle_job(job):
             except Exception as exc:
                 log.warning("visual preparation skipped: %s", type(exc).__name__)
             job["prepared_inputs"] = (images, texts, notes)
+        if job.get("render_mode") == "3d":
+            from three_d import make_video_3d
+            path, title = make_video_3d(job, workdir, lambda msg: _safe_text(job, msg))
+            discord_video(job, path, title)
+            return
         path, title, note = None, None, ""
         if os.environ.get("FULL_GEN", "1") == "1":
             from fullgen import FullGenFailed, make_video_fullgen

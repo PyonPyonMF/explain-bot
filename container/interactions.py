@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
+from render_modes import mention_mode, selected_mode
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -212,12 +213,14 @@ def handle(i, enqueue):
             return _ephemeral(S["expired"])
         job = {**_base(i), "kind": "message", "text": "", "message": saved["message"], "channel_id": saved["channel_id"],
                "question": _find_value(d.get("components"), "q") or ""}
+        job["question"], job["render_mode"] = mention_mode(job["question"])
     elif t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT:
         q = _option(i, "query")
         if not isinstance(q, str) or not q.strip():
             return _ephemeral(S["empty"])
         n = max(0, min(50, int(_option(i, "messages") or 0)))
         job = {**_base(i), "kind": "query", "text": q[:MAX_TEXT], "channel_id": _channel(i), "context_messages": n}
+        job["render_mode"] = selected_mode(_option(i, "mode"))
         private = _option(i, "private") is True
     elif t == APPLICATION_COMMAND and d.get("type") == MESSAGE_COMMAND:
         m = ((d.get("resolved") or {}).get("messages") or {}).get(d.get("target_id"))

@@ -13,6 +13,7 @@ services:
     volumes:
       - ./data:/data
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
+      - ./models3d:/models3d:ro
     logging:
       driver: json-file
       options:

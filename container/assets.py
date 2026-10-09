@@ -208,6 +208,8 @@ def visual_content(assets):
 
 def source_text(job):
     lines = []
+    if job.get("avatar_credit"):
+        lines.append(job["avatar_credit"])
     for asset in job.get("assets", []):
         if asset.get("source_url"):
             credit = " · ".join(v for v in (asset.get("credit"), asset.get("license")) if v)

@@ -194,6 +194,22 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("обсуждают", job["text"])
         self.assertEqual(job["context_messages"], 10)
 
+    async def test_3d_mention_keeps_reply_context(self):
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = message("A pendulum", mid=200)
+        msg = message("<@999> 3d объясни почему качается", reference=ref)
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["render_mode"], "3d")
+        self.assertEqual(job["question"], "объясни почему качается")
+        self.assertEqual(job["message"]["content"], "A pendulum")
+
+    async def test_slash_3d_mode_is_explicit_and_preserves_private_flag(self):
+        i = interaction({"type":1, "options":[{"name":"query","value":"маятник"},{"name":"mode","value":"3d"},{"name":"private","value":True}]})
+        await self.bot.on_interaction(i)
+        self.assertEqual(self.submit.call_args.args[1]["render_mode"], "3d")
+        i.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
+
     async def test_ignore_bots_and_non_mentions(self):
         messages = [message("hello"), message("@everyone"), message("<@123>"), message()]
         messages[-1].author.bot = True

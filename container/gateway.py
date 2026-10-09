@@ -13,6 +13,7 @@ import urllib.request
 import discord
 
 import interactions as I
+from render_modes import mention_mode
 
 log = logging.getLogger("gateway")
 
@@ -62,11 +63,12 @@ class QuotedMessageUnavailable(Exception):
 
 async def mention_job(message, bot_id):
     text = re.sub(rf"<@!?{bot_id}>", "", message.content).strip()[:I.MAX_TEXT]
+    text, mode = mention_mode(text)
     own = message_payload(message)
     own["content"] = text
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
-           "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru"}
+           "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode}
     target = None
     ref = message.reference
     if ref and ref.type == discord.MessageReferenceType.default and ref.message_id:

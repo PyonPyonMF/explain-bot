@@ -22,6 +22,16 @@
         "type": 5, "name": "private", "name_localizations": { "ru": "приватно" },
         "description": "Only you see the video", "description_localizations": { "ru": "Видео увидишь только ты" },
         "required": false
+      },
+      {
+        "type": 3, "name": "mode", "name_localizations": { "ru": "режим" },
+        "description": "Video style: normal 2D or a Blender 3D classroom",
+        "description_localizations": { "ru": "Обычное видео или 3D-сцена в Blender" },
+        "required": false,
+        "choices": [
+          { "name": "2D", "value": "2d" },
+          { "name": "3D classroom", "name_localizations": { "ru": "3D-класс" }, "value": "3d" }
+        ]
       }
     ]
   },

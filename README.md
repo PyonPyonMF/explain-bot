@@ -22,6 +22,39 @@ Videos can use actual image references instead of drawing every object with geom
   Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.
 Source links/credits accompany the finished video, and generated illustrations are labeled as such.
 
+### Optional 3D classroom mode
+
+Use `@BigBro 3d объясни, почему маятник качается` or `/explain query:... mode:3d`.
+Replies/quoted posts keep their conversation context in 3D mode too. Normal requests stay in 2D.
+
+Blender builds a real classroom with a board, narrated scene changes, and animated 3D demonstration objects.
+The board can show text and the image references prepared for the explanation. The scene planner chooses
+meaningful models/diagrams for the topic rather than treating every object as the same primitive.
+For detailed real-world objects, add a GLB/GLTF model to the local catalog so the renderer can use its actual
+geometry and materials instead of an approximation.
+
+Place the teacher model at `models3d/teacher.vrm` on the server (or set `VRM_AVATAR_PATH` under `/models3d`).
+The directory is mounted read-only and excluded from Git. VRM 1.0 and 0.x import through the VRM add-on;
+the presenter is normalized to classroom scale, gets arm gestures, idle motion and basic mouth/blink
+animation where the model's rig/expressions support them. Without a VRM file the scene renders without a
+presenter. Creator credits from VRM metadata accompany the video. Respect the model's usage license.
+
+Optional `models3d/catalog.json`:
+
+```json
+[
+  {"id":"microscope", "file":"microscope.glb", "description":"Detailed optical microscope",
+   "credit":"Model creator", "source_url":"https://example.com/model"}
+]
+```
+
+The CPU profile uses Blender Workbench with textures, studio shading and FXAA, 960×540 at 8 rendered FPS
+(encoded as 24 FPS). `THREED_ENGINE=BLENDER_EEVEE_NEXT` enables more advanced lighting at a higher render
+cost. `THREED_FPS`, `THREED_WIDTH`, `THREED_HEIGHT`, `THREED_SAMPLES`, `THREED_MAX_SECONDS` and
+`THREED_RENDER_TIMEOUT` are configurable. Lessons are intentionally short (two or three scenes). A 3D
+failure is reported as a failure; it is not silently replaced by a 2D clip. Generated Blender code runs as
+the unprivileged sandbox user with API credentials removed, with auto-execution from model files disabled.
+
 For a post, the bot reads: the text, images (up to 4), link previews, small text files (`.txt`, `.py`, …),
 the pages behind links (up to 3), the message it replies to, and the 10 messages before it.
 

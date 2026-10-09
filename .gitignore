@@ -8,3 +8,4 @@ __pycache__/
 .env
 data/
 output/
+models3d/
