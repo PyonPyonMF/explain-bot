@@ -1,0 +1,19 @@
+# Standalone Discord bot: no domain, HTTPS server, or inbound ports.
+# docker compose -f compose.gateway.yml up -d --build
+services:
+  bot:
+    build: ./container
+    command: ["python", "gateway.py"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      CODE_VERSION: ${CODE_VERSION:-gateway}
+      RENDER_WORKERS: ${RENDER_WORKERS:-2}
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,4 +1,5 @@
 node_modules/
+.venv/
 .wrangler/
 dist/
 __pycache__/

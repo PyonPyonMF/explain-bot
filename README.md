@@ -46,7 +46,34 @@ Discord ──► Worker (src/index.ts)
 Generated code runs as an unprivileged user without the API keys in its environment; it cannot read the
 server's environment or write to /app. It still has network access.
 
-## Self-hosting (your own server, no Cloudflare)
+## Standalone bot (no public HTTPS address)
+
+The bot can connect directly to Discord over the Gateway. It needs only outbound internet access;
+no domain, reverse proxy, public key, or open inbound ports. Slash commands and both message commands
+work in servers where the bot is installed, and in DMs with the bot.
+
+```bash
+git clone https://github.com/PyonPyonMF/explain-bot && cd explain-bot
+cp .env.example .env
+# Fill DISCORD_BOT_TOKEN, ANTHROPIC_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID.
+docker compose -f compose.gateway.yml up -d --build
+```
+
+In Discord Developer Portal, clear **General Information → Interactions Endpoint URL** if one was set.
+Discord sends commands either to that URL or to the Gateway, never to both
+([Discord documentation](https://docs.discord.com/developers/interactions/receiving-and-responding#receiving-an-interaction)).
+Add the bot to your server with scopes `bot` and `applications.commands`, and permissions
+*View Channels* and *Read Message History*. Enable **Bot → Message Content Intent** if you want it to read
+earlier messages as context. No privileged Gateway intents are requested just to receive commands.
+
+Commands are registered automatically at startup; set `REGISTER_COMMANDS=0` to skip registration.
+Run only one Gateway instance for this bot token. The renderer processes one video at a time, with
+`MAX_QUEUED_JOBS` waiting jobs. `RENDER_WORKERS` defaults to 2 in this Compose configuration.
+
+Logs: `docker compose -f compose.gateway.yml logs -f bot`.
+Update: `git pull --ff-only && docker compose -f compose.gateway.yml up -d --build`.
+
+## Self-hosting over HTTP (your own server, no Cloudflare)
 
 One Docker container receives the Discord interactions (`POST /interactions`) and renders the videos.
 No Worker, KV or Durable Objects; the daily limit is stored in `./data/bot.sqlite`.
