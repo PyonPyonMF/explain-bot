@@ -4,6 +4,8 @@ Canvas: c = canvas(fig) gives an axes with x 0..16, y 0..9 (1280x720 px, 80 px p
 The band y < 1.6 is reserved for subtitles; the harness draws them.
 """
 import math  # noqa: F401  (re-exported)
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np  # noqa: F401
 import matplotlib  # noqa: F401
@@ -16,6 +18,55 @@ from scenes import (BG, BLUE, FG, GREY, GRN, ORANGE, PAL, PANEL, PURPLE, RED, YE
 
 SUB_TOP = 1.6        # keep content above this y (subtitles below)
 CONTENT_TOP = 8.85   # keep content below this y
+_ASSETS = {}
+_USED_ASSETS = set()
+
+
+def configure_assets(assets):
+    """Called by the trusted harness before loading generated scene code."""
+    _ASSETS.clear()
+    _ASSETS.update({a["id"]: a for a in assets})
+    _USED_ASSETS.clear()
+    _pixels.cache_clear()
+
+
+@lru_cache(maxsize=8)
+def _pixels(asset_id):
+    from PIL import Image
+    path = Path(_ASSETS[asset_id]["path"])
+    with Image.open(path) as im:
+        return np.asarray(im.convert("RGB"))
+
+
+def used_assets():
+    return sorted(_USED_ASSETS)
+
+
+def clear_asset_usage():
+    _USED_ASSETS.clear()
+
+
+def image(c, asset_id, x, y, w, h, alpha=1.0, credit=True):
+    """Fit an approved raster asset inside a canvas rectangle; preserve its proportions."""
+    if asset_id not in _ASSETS:
+        raise ValueError(f"unknown visual asset: {asset_id}")
+    pixels = _pixels(asset_id)
+    ratio = pixels.shape[1] / pixels.shape[0]
+    draw_w = min(w, h * ratio)
+    draw_h = draw_w / ratio
+    left, bottom = x + (w - draw_w) / 2, y + (h - draw_h) / 2
+    xlim, ylim = c.get_xlim(), c.get_ylim()
+    artist = c.imshow(pixels, extent=(left, left + draw_w, bottom, bottom + draw_h),
+                      aspect="auto", interpolation="bilinear", alpha=max(0, min(1, alpha)), zorder=1)
+    c.set_xlim(xlim); c.set_ylim(ylim)
+    if alpha > 0.1:
+        _USED_ASSETS.add(asset_id)
+    if credit and _ASSETS[asset_id].get("credit"):
+        label = "AI-иллюстрация" if _ASSETS[asset_id].get("kind") == "generated" else (
+            "Wikimedia Commons" if _ASSETS[asset_id].get("kind") == "web" else "Референс из сообщения")
+        c.text(left + 0.12, bottom + 0.12, label, fontsize=12, color=FG, va="bottom", alpha=alpha,
+               bbox=dict(facecolor=BG, edgecolor="none", alpha=0.8, pad=3), zorder=3)
+    return artist
 
 
 def lerp(a, b, u):

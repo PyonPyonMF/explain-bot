@@ -13,6 +13,15 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   Pasted quotes and forwarded posts are also supported. The bot replies with progress, then attaches the video
   to that same reply; it ignores other bots and does not ping participants.
 
+Videos can use actual image references instead of drawing every object with geometric primitives:
+- Discord attachments are made available to the renderer as image assets.
+- Wikimedia Commons supplies relevant photos/diagrams with source and license information.
+- A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
+- Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
+  sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.
+  Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.
+Source links/credits accompany the finished video, and generated illustrations are labeled as such.
+
 For a post, the bot reads: the text, images (up to 4), link previews, small text files (`.txt`, `.py`, …),
 the pages behind links (up to 3), the message it replies to, and the 10 messages before it.
 
@@ -80,6 +89,31 @@ Run only one Gateway instance for this bot token. The renderer processes one vid
 
 Logs: `docker compose -f compose.gateway.yml logs -f bot`.
 Update: `git pull --ff-only && docker compose -f compose.gateway.yml up -d --build`.
+
+### Codex illustration worker (Linux)
+
+Install Codex CLI and sign in with ChatGPT under the account that will run the worker. Image generation uses
+that account's Codex limits; no OpenAI API key is required. The supplied systemd unit uses account `coder` and
+`/home/coder/.local/bin/codex`; adjust those paths/user/group for another host.
+
+```bash
+sudo install -d -o coder -g coder -m 700 /var/lib/explain-bot-visuals/queue
+sudo cp deploy/explain-bot-visuals.service /etc/systemd/system/
+# Optional non-secret overrides: CODEX_VISUAL_MODEL, CODEX_BIN in /etc/explain-bot-visuals.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now explain-bot-visuals
+docker compose -f compose.gateway.yml up -d --build
+```
+
+Set `CODEX_VISUAL_UID`/`CODEX_VISUAL_GID` in `.env` to the worker account's numeric UID/GID (`id coder`).
+Only a private queue directory is mounted into the bot; Codex authentication stays on the host. The CLI runs
+with shell tools, plugins, hooks, computer use, and subagents disabled. It receives a constrained illustration
+brief and up to two visual references. It has a 210-second deadline. Per-job files are deleted after delivery;
+abandoned results are cleaned up after one hour.
+
+`VISUAL_ASSETS=0` disables visual preparation, `WEB_VISUALS=0` disables Commons image lookup, and
+`CODEX_IMAGES=0` disables generated illustrations. Missing/unavailable image services fall back to existing
+references and the normal renderer. Use `journalctl -u explain-bot-visuals` for worker status.
 
 ## Self-hosting over HTTP (your own server, no Cloudflare)
 

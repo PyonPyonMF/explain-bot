@@ -1,0 +1,26 @@
+[Unit]
+Description=Explain Bot Codex illustration worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coder
+Group=coder
+Environment=CODEX_BIN=/home/coder/.local/bin/codex
+Environment=CODEX_HOME=/home/coder/.codex
+Environment=CODEX_VISUAL_QUEUE=/var/lib/explain-bot-visuals/queue
+Environment=CODEX_VISUAL_TIMEOUT=210
+EnvironmentFile=-/etc/explain-bot-visuals.env
+ExecStart=/usr/bin/python3 /opt/explain-bot/scripts/codex_visual_worker.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/explain-bot-visuals /home/coder/.codex
+PrivateTmp=true
+MemoryMax=1400M
+
+[Install]
+WantedBy=multi-user.target

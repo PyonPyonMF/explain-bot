@@ -503,7 +503,11 @@ def draw_frame(fig, s, x, subs, t, T):
     c = canvas(fig)
     if s["type"] != "title":
         draw_heading(c, s, t)
-    RENDERERS[s["type"]][1](fig, c, s, x, t, T)
+    if s.get("_asset"):
+        from kit import image
+        image(c, s["_asset"]["id"], 0.7, 2.0, 14.6, 5.65, alpha=appear(t, 0.1))
+    else:
+        RENDERERS[s["type"]][1](fig, c, s, x, t, T)
     draw_subtitles(c, subs, t)
 
 
@@ -549,6 +553,9 @@ def render_scene(args):
     """Render one template scene with its audio to an MP4 segment. Runs in a worker process."""
     s, audio_path, audio_len, out_path, first, last, crf = args
     T = scene_duration(audio_len)
-    x = RENDERERS[s["type"]][0](s)
+    if s.get("_asset"):
+        from kit import configure_assets
+        configure_assets([s["_asset"]])
+    x = None if s.get("_asset") else RENDERERS[s["type"]][0](s)
     subs = build_subtitles(s["narration"], audio_len)
     return encode_scene(lambda fig, t: draw_frame(fig, s, x, subs, t, T), T, audio_path, out_path, first, last, crf)

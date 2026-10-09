@@ -43,6 +43,9 @@ KIT_DOC = """kit API (from kit import *):
 - appear(t, t0, d=0.5) -> 0..1 smooth fade-in starting at t0.  sm(u) smoothstep.  lerp(a, b, u).
 - stagger(n, T) -> n start times spread over the first 60 % of the scene.
 - draw_partial(ax, xs, ys, u, **plot_kw): draw the first fraction u of a curve.
+- image(c, asset_id, x, y, w, h, alpha=1, credit=True): place a supplied photo or generated illustration inside
+  this rectangle, preserving aspect ratio. Only exact asset IDs from the input are allowed. Image coordinates
+  follow the canvas convention (lower-left x,y). This caches pixels; do not open image files yourself.
 - style_axes(ax): 3b1b-style axes (no top/right spines, grey ticks).
 - fit(text, width, size, min_size, max_lines) -> (wrapped_text, size).  fmt(number) -> short string.
 - Colours: BG FG GREY PANEL BLUE YEL GRN RED PURPLE ORANGE, PAL = list of 6 accent colours.
@@ -92,7 +95,7 @@ PLAN RULES
   no emoji, formulas said in words. Each scene's narration describes what is on screen in that scene.
 - Be correct. If the post contains an error or a misconception, say so plainly and explain the correct version.
 - Do not invent numbers, statistics, dates or quotes. Compute numbers in the code when you show them.
-- Input can contain <request>, <post>, <question>, <replied_to>, <conversation_before>, <attachment>, <linked_page>
+- Input can contain <request>, <post>, <question>, <replied_to>, <conversation_before>, <attachment>, <linked_page>, <research_reference>
   and images. Explain the post or request in that context; if a <question> is given, answer it.
   Reply ancestors and conversation are ordered oldest first. Conversation ends before the user's request,
   and can include responses made after the target post. Attribute claims to their actual authors.
@@ -110,6 +113,13 @@ CODE CONTRACT
 - Charts: ax = fig.add_axes([left, bottom, width, height]) in figure fractions with bottom >= 0.22, then style_axes(ax).
 - Look: dark background (already set), accent colours, thick smooth lines, objects that draw, grow, move and
   transform in sync with the narration. Few words on screen; large, readable text (18 to 40 pt). Every scene moves.
+- Choose the visual representation that makes the specific explanation understandable. Use supplied images
+  with image() when appearance, real structure, or spatial context matter. Explain processes and phenomena
+  with animated relationships, stages, comparisons, or overlays; a decorative photo alone is insufficient.
+  Use code for precise plots, formulas, diagrams, arrows, callouts and highlights. Simplify only when the
+  abstraction preserves what the narration explains; avoid crude or misleading stand-ins. Prefer one clear
+  explanatory visual to unrelated decoration. Irrelevant supplied assets may be omitted and will be reviewed.
+  Never present an AI illustration as a photograph of an actual event. The helper adds a small source credit.
 - Text supports Cyrillic, Latin and Greek. Formulas: mathtext with $...$ (^ _ \\frac \\sqrt \\sum \\cdot greek
   \\mathrm; no \\text, \\begin, \\left, \\right). Use raw strings for backslashes.
 - Imports: only kit, numpy, math, matplotlib. No files, no network, no plt.show(), no savefig, no new figures.
@@ -128,6 +138,13 @@ subtitles drawn, plus crashes and automatic checks.
 Fix every problem you see: crashes; text outside the frame or in the subtitle band (y < 1.6); text or objects on
 top of each other; text that is too small (< 16 pt), cut off or too long; empty, static or confusing scenes;
 visuals that do not match the narration; wrong math or numbers; slow frames (> 120 ms).
+Evaluate whether the representation makes the actual concept clear and accurate: appearance and structure
+must be recognizable when relevant; processes and phenomena need causal/temporal relationships; quantitative
+claims need correct computed graphics. Reject misleading simplifications and decorative images that do not
+help. Use relevant supplied imagery when it improves the explanation, preserving image() asset IDs. Omission
+of irrelevant assets is acceptable when the diagram/animation explains the concept better; assess the unused
+asset warning on that basis, not merely on whether an image is present.
+Small source-credit labels are intentional; do not replace them with large captions.
 Keep the plan unchanged: same number of scenes, same order; the narration is fixed.
 
 If everything is good, reply exactly: <verdict>ok</verdict>
@@ -238,6 +255,7 @@ def test_render(code, plan, durations, workdir, rnd):
     code_path = os.path.join(d, "video_code.py")
     _write(code_path, code)
     spec = {"code": code_path, "mode": "test", "out_dir": d, "fractions": [0.35, 0.85],
+            "assets": plan.get("_assets", []),
             "scenes": [{"T": S.scene_duration(a), "audio_len": a, "narration": s["narration"], "title": s["heading"]}
                        for s, a in zip(plan["scenes"], durations)]}
     spec_path = os.path.join(d, "spec.json")
@@ -262,7 +280,7 @@ def _pair_image(paths):
 
 
 def needs_review(result):
-    if result.get("import_error"):
+    if result.get("import_error") or result.get("missing_visuals"):
         return True
     return any(s.get("error") or s.get("lint") or s.get("slow_ms", 0) > 120 for s in result["scenes"])
 
@@ -270,6 +288,8 @@ def needs_review(result):
 def review(code, plan, result):
     content = [{"type": "text", "text": "PLAN:\n" + json.dumps(plan, ensure_ascii=False) + "\n\nCODE:\n```python\n"
                 + code + "```"}]
+    if result.get("missing_visuals"):
+        content.append({"type": "text", "text": "No supplied visual asset was displayed. Use a relevant asset with image() instead of a crude geometric stand-in."})
     if result.get("import_error"):
         content.append({"type": "text", "text": "The module does not run at all:\n" + result["import_error"]})
     else:
@@ -285,6 +305,7 @@ def review(code, plan, result):
             content.append(_pair_image([f["path"] for f in s["frames"]]))
     text, stop = claude(REVIEW_SYSTEM, content)
     if "<verdict>ok</verdict>" in text.replace(" ", "").lower():
+        result["review_approved"] = True
         return None
     new = extract_code(text)
     if not new or stop == "max_tokens":
@@ -310,7 +331,7 @@ def full_render(code, plan, audio, workdir):
     def one(k):
         spec_path = os.path.join(d, f"spec_{k}.json")
         _write(spec_path, json.dumps({"code": code_path, "mode": "full", "out_dir": d, "only": [k],
-                                      "scenes": scenes, "crf": P.CRF}))
+                                      "scenes": scenes, "crf": P.CRF, "assets": plan.get("_assets", [])}))
         try:
             run_sandbox(spec_path, timeout=max(150, int(scenes[k]["T"] * 8)))
             r = json.load(open(os.path.join(d, f"result-full-{k}.json")))
@@ -345,9 +366,10 @@ def make_video_fullgen(job, workdir, progress):
     t_start = time.time()
     os.chmod(workdir, 0o755)  # mkdtemp makes it 0700; the sandbox user must reach the subfolders
     progress(P.S["p_write"])
-    images, texts, _ = collect(job)
+    images, texts, _ = job.get("prepared_inputs") or collect(job)
     _, user_text = P.build_user_content(job, images, texts)
-    content = images + [{"type": "text", "text": user_text}]
+    from assets import visual_content
+    content = (visual_content(job["assets"]) if job.get("assets") else images) + [{"type": "text", "text": user_text}]
 
     plan, code, stop = None, None, None
     for attempt in range(2):
@@ -362,6 +384,7 @@ def make_video_fullgen(job, workdir, progress):
             log.warning("generation attempt %d failed: %s", attempt, e)
     if not plan or not code:
         raise FullGenFailed(f"Sonnet returned no usable plan and code (last stop_reason: {stop})")
+    plan["_assets"] = job.get("assets", [])
     log.info("generated %d scenes, %d lines of code in %.0fs", len(plan["scenes"]), code.count("\n"),
              time.time() - t_start)
 
@@ -373,8 +396,11 @@ def make_video_fullgen(job, workdir, progress):
         good_code, last_error = None, ""
         for rnd in range(REVIEW_ROUNDS + 1):
             result = test_render(code, plan, est, workdir, rnd)
-            if not result.get("import_error"):
+            if not result.get("import_error") and not result.get("missing_visuals"):
                 good_code = code
+            elif result.get("missing_visuals"):
+                last_error = "The scene code did not display any supplied visual asset"
+                log.warning("test round %d: supplied images were not used", rnd)
             else:
                 last_error = result["import_error"]
                 log.warning("test round %d: code does not run: %s", rnd, last_error[-500:])
@@ -386,6 +412,8 @@ def make_video_fullgen(job, workdir, progress):
             progress(P.S["p_review"].format(rnd + 1))
             new = review(code, plan, result)
             if new is None:
+                if result.get("review_approved") and not result.get("import_error"):
+                    good_code = code
                 break
             code = new
         audio = voice_future.result()

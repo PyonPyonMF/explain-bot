@@ -30,11 +30,13 @@ DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 
 STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
+           "p_visuals": "🖼️ Подбираю референсы и готовлю иллюстрации…",
            "refused": "⚠️ Не буду это объяснять: {}", "bad_plan": "⚠️ Модель вернула неправильный план видео. Попробуй ещё раз.",
            "too_big": "⚠️ Видео получилось слишком большим для Discord.",
            "p_write": "✍️ Пишу сценарий и анимацию…", "p_review": "🔎 Проверяю кадры (раунд {})…",
            "p_render": "🎬 Рендерю видео…"},
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
+           "p_visuals": "🖼️ Finding references and preparing illustrations…",
            "refused": "⚠️ I will not explain this: {}", "bad_plan": "⚠️ The model returned an invalid video plan. Try again.",
            "too_big": "⚠️ The video is too large for Discord.",
            "p_write": "✍️ Writing the script and the animation…", "p_review": "🔎 Checking frames (round {})…",
@@ -60,7 +62,7 @@ Rules:
   For gradient_descent pick a learning rate that converges visibly in the given number of steps.
 - Input can contain: <request> (what the user asked), <post> (the Discord message to explain), <replied_to> (reply
   ancestors, oldest first), <conversation_before> (discussion before the user's request, oldest first), <attachment>,
-  <linked_page>, and images. The discussion can include responses made after the target post.
+  <linked_page>, <research_reference> (web research with source URLs), and images. The discussion can include responses made after the target post.
   Explain the post or request IN THAT CONTEXT: what is said, what it refers to, who claims what, what is true.
   Describe what matters in the images (a screenshot, a chart, a meme) and use the linked pages as sources.
   If a <question> is given, answer that question about the post.
@@ -112,6 +114,8 @@ def build_user_content(job, images, texts):
     else:
         parts.append(f"Explain this request from a Discord user.\n<request>\n{job['text']}\n</request>")
     parts += texts
+    if job.get("visual_strategy"):
+        parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
     return images, "\n\n".join(parts)
 
@@ -162,7 +166,7 @@ def parse_json_reply(text):
 
 
 def make_plan(job):
-    images, texts, _ = collect(job)
+    images, texts, _ = job.get("prepared_inputs") or collect(job)
     log.info("inputs: %d images, %d text blocks, %d chars", len(images), len(texts), sum(len(t) for t in texts))
     inputs = build_user_content(job, images, texts)
     feedback = None
@@ -280,6 +284,13 @@ def concat_and_fit(results, workdir):
 def make_video(job, workdir):
     t0 = time.time()
     plan = make_plan(job)
+    if job.get("assets"):
+        # Even the template fallback should show real imagery in a textual scene.
+        asset = next((a for a in job["assets"] if a.get("kind") == "generated"), job["assets"][0])
+        for scene in plan["scenes"]:
+            if scene["type"] in ("statement", "bullets"):
+                scene["_asset"] = asset
+                break
     t1 = time.time()
     audio = voice_all(plan, workdir)
     t2 = time.time()
@@ -312,6 +323,10 @@ def discord_text(job, content):
 def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
+    from assets import source_text
+    sources = source_text(job)
+    if sources:
+        content += "\n\n" + sources
     payload = {"content": content[:1900], "allowed_mentions": {"parse": []},
                "attachments": [{"id": 0, "filename": "explain.mp4"}]}
     with open(path, "rb") as f:
@@ -331,6 +346,17 @@ def discord_video(job, path, title, debug=""):
 def handle_job(job):
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
+        if os.environ.get("VISUAL_ASSETS", "1") == "1":
+            _safe_text(job, S["p_visuals"])
+            images, texts, notes = collect(job)
+            try:
+                from assets import prepare_visuals
+                job["assets"], job["research"] = prepare_visuals(job, images, texts, workdir)
+                for ref in job["research"]:
+                    texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
+            except Exception as exc:
+                log.warning("visual preparation skipped: %s", type(exc).__name__)
+            job["prepared_inputs"] = (images, texts, notes)
         path, title, note = None, None, ""
         if os.environ.get("FULL_GEN", "1") == "1":
             from fullgen import FullGenFailed, make_video_fullgen

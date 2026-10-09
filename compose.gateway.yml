@@ -12,6 +12,7 @@ services:
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
     volumes:
       - ./data:/data
+      - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
     logging:
       driver: json-file
       options:

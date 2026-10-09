@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 import scenes as S  # noqa: E402
+import kit  # noqa: E402
 
 W, H = S.W_PX, S.H_PX
 SUB_BAND_PX = 1.6 * 80  # subtitle band height in pixels
@@ -90,6 +91,7 @@ def run_test(fns, spec, out):
         fig.clf(); fns[spec_indexes(spec)[0]](fig, 0.0, spec["scenes"][spec_indexes(spec)[0]]["T"]); fig.canvas.draw()
     except Exception:
         pass
+    kit.clear_asset_usage()
     for k in spec_indexes(spec):
         sc, T = spec["scenes"][k], spec["scenes"][k]["T"]
         subs = S.build_subtitles(sc.get("narration", ""), sc.get("audio_len", 0))
@@ -150,6 +152,7 @@ def run_full(fns, spec, out):
 
 def main():
     spec = json.load(open(sys.argv[1]))
+    kit.configure_assets(spec.get("assets", []))
     out = spec["out_dir"]
     tag = f"{spec['mode']}-{(spec.get('only') or [0])[0]}"
     result_path = os.path.join(out, f"result-{tag}.json")
@@ -162,6 +165,8 @@ def main():
         json.dump({"import_error": short_tb(15)}, open(result_path, "w"))
         return
     res = run_test(fns, spec, out) if spec["mode"] == "test" else run_full(fns, spec, out)
+    res["used_assets"] = kit.used_assets()
+    res["missing_visuals"] = bool(spec.get("assets")) and not res["used_assets"]
     json.dump(res, open(result_path, "w"))
 
 
