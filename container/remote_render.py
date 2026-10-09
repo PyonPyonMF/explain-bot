@@ -47,13 +47,15 @@ def render(base, work, run_blender, progress):
         lock.mkdir()
     except FileExistsError:
         # Bot restart/crash recovery; longer than any allowed remote job.
-        if time.time() - lock.stat().st_mtime < 1000:
-            return None
-        lock.rmdir()
         try:
+            if time.time() - lock.stat().st_mtime < 1000:
+                return None
+            lock.rmdir()
             lock.mkdir()
-        except FileExistsError:
+        except OSError:
             return None
+    except OSError:
+        return None
     job = queue / uuid.uuid4().hex
     try:
         job.mkdir(mode=0o700)

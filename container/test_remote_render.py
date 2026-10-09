@@ -39,6 +39,14 @@ class RemoteTests(unittest.TestCase):
         self.assertIsNone(R.render({"fps":8,"scenes":[]},self.root,fail,lambda _:None))
         self.assertEqual([p.name for p in self.root.iterdir()],["worker.json"])
 
+    def test_competing_job_does_not_steal_worker_reservation(self):
+        self.heartbeat()
+        (self.root/'reserved').mkdir()
+        def unexpected(*args):
+            self.fail('second job must use the server')
+        self.assertIsNone(R.render({},self.root,unexpected,lambda _:None))
+        self.assertTrue((self.root/'reserved').exists())
+
     def test_disconnect_after_submission_cancels_queue(self):
         self.heartbeat()
         def baked(spec,*args):
