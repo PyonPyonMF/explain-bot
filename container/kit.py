@@ -6,6 +6,7 @@ The band y < 1.6 is reserved for subtitles; the harness draws them.
 import math  # noqa: F401  (re-exported)
 from functools import lru_cache
 from pathlib import Path
+import urllib.parse
 
 import numpy as np  # noqa: F401
 import matplotlib  # noqa: F401
@@ -62,11 +63,21 @@ def image(c, asset_id, x, y, w, h, alpha=1.0, credit=True):
     if alpha > 0.1:
         _USED_ASSETS.add(asset_id)
     if credit and _ASSETS[asset_id].get("credit"):
-        label = "AI-иллюстрация" if _ASSETS[asset_id].get("kind") == "generated" else (
-            "Wikimedia Commons" if _ASSETS[asset_id].get("kind") == "web" else "Референс из сообщения")
+        label = credit_label(_ASSETS[asset_id])
         c.text(left + 0.12, bottom + 0.12, label, fontsize=12, color=FG, va="bottom", alpha=alpha,
                bbox=dict(facecolor=BG, edgecolor="none", alpha=0.8, pad=3), zorder=3)
     return artist
+
+
+def credit_label(asset):
+    """Short on-frame credit; the full source link goes into the message under the video."""
+    if asset.get("kind") == "generated":
+        return "AI-иллюстрация"
+    if asset.get("kind") == "web":
+        site = asset.get("provider") if asset.get("provider") in ("Wikimedia Commons", "Openverse") else ""
+        site = site or urllib.parse.urlsplit(asset.get("source_url") or "").hostname or "Источник под видео"
+        return " · ".join(v for v in (site.removeprefix("www."), asset.get("license")) if v)[:60]
+    return str(asset.get("credit") or "Референс из сообщения")[:60]
 
 
 def lerp(a, b, u):

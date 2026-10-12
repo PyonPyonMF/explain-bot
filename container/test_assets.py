@@ -55,6 +55,56 @@ class AssetTests(unittest.TestCase):
         self.assertIn("https://example.com/photo", text)
         self.assertIn("AI-иллюстрация", text)
 
+    def test_openverse_formats_license_and_landing_page(self):
+        raw = json.dumps({"results": [{"url": "https://live.staticflickr.com/a.jpg", "thumbnail": "https://api.openverse.org/v1/images/1/thumb/",
+                                       "foreign_landing_url": "https://flickr.com/photos/a/1", "title": "Pendulum",
+                                       "creator": "Ann", "license": "by-sa", "license_version": "2.0"}]}).encode()
+        with patch.object(assets, "fetch", return_value=(raw, "application/json")):
+            found = list(assets.openverse_candidates("pendulum"))
+        self.assertEqual(found[0]["license"], "CC BY-SA 2.0")
+        self.assertEqual(found[0]["source_url"], "https://flickr.com/photos/a/1")
+
+    def test_web_search_providers_follow_configuration(self):
+        with patch.dict(os.environ, {"BRAVE_SEARCH_API_KEY": "", "SEARXNG_URL": "", "IMAGE_SEARCH_PROVIDERS": ""}):
+            self.assertEqual(assets.image_providers(), [assets.commons_candidates, assets.openverse_candidates])
+        with patch.dict(os.environ, {"BRAVE_SEARCH_API_KEY": "k", "SEARXNG_URL": "http://searxng:8080", "IMAGE_SEARCH_PROVIDERS": "auto"}):
+            self.assertEqual(assets.image_providers()[:2], [assets.brave_candidates, assets.searxng_candidates])
+        with patch.dict(os.environ, {"IMAGE_SEARCH_PROVIDERS": "openverse, nope"}):
+            self.assertEqual(assets.image_providers(), [assets.openverse_candidates])
+
+    def test_model_picks_the_relevant_web_image_and_describes_it(self):
+        off_topic = {"url": "https://a.example/logo.png", "caption": "Logo", "source_url": "https://a.example", "kind": "web", "provider": "Brave"}
+        right = {"url": "https://b.example/pendulum.jpg", "caption": "IMG_2041", "source_url": "https://b.example/page", "kind": "web", "provider": "Brave"}
+        with patch.object(assets, "image_providers", return_value=[lambda q: iter([off_topic, right])]), \
+                patch.object(assets, "fetch", return_value=(png(), "image/png")), \
+                patch.object(assets, "_ask_claude", return_value={"choices": [{"search": 1, "candidate": 2, "shows": "A brass pendulum mid-swing"}]}):
+            found = assets.find_web_images(["pendulum"], "show a swing", 3)
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0][0]["url"], right["url"])
+        self.assertEqual(found[0][0]["caption"], "A brass pendulum mid-swing")
+
+    def test_rejected_candidates_are_not_used_but_judge_outage_falls_back(self):
+        hit = {"url": "https://b.example/x.jpg", "caption": "x", "source_url": "https://b.example", "kind": "web"}
+        with patch.object(assets, "image_providers", return_value=[lambda q: iter([hit])]), patch.object(assets, "fetch", return_value=(png(), "image/png")):
+            with patch.object(assets, "_ask_claude", return_value={"choices": [{"search": 1, "candidate": None}]}):
+                self.assertEqual(assets.find_web_images(["x"], "", 3), [])
+            with patch.object(assets, "_ask_claude", side_effect=RuntimeError("offline")):
+                self.assertEqual(len(assets.find_web_images(["x"], "", 3)), 1)
+
+    def test_linked_post_images_keep_their_source(self):
+        image = {"type": "image", "source": {"type": "base64", "data": base64.b64encode(png()).decode(), "media_type": "image/png"}}
+        job = {"image_meta": [{"caption": "Photo from the linked X post", "credit": "@garrytan (X)", "source_url": "https://x.com/garrytan/status/1"}]}
+        with tempfile.TemporaryDirectory() as directory, patch.object(assets, "plan_visuals", side_effect=RuntimeError("offline")):
+            prepared, _ = assets.prepare_visuals(job, [image], [], directory)
+        self.assertEqual(prepared[0]["kind"], "user")
+        self.assertEqual(prepared[0]["credit"], "@garrytan (X)")
+        self.assertIn("https://x.com/garrytan/status/1", assets.source_text({"assets": prepared}))
+
+    def test_frame_credit_names_the_actual_source(self):
+        self.assertEqual(kit.credit_label({"kind": "web", "provider": "Brave", "source_url": "https://www.nasa.gov/a"}), "nasa.gov")
+        self.assertEqual(kit.credit_label({"kind": "web", "provider": "Openverse", "license": "CC BY 2.0"}), "Openverse · CC BY 2.0")
+        self.assertEqual(kit.credit_label({"kind": "user", "credit": "@garrytan (X)"}), "@garrytan (X)")
+
     def queue_response(self, queue, result):
         deadline = time.monotonic() + 4
         while time.monotonic() < deadline:

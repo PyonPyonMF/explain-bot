@@ -60,7 +60,7 @@ class ContextTests(unittest.TestCase):
         target = post(200, "See https://example.com/article")
         target["attachments"] = [{"url": "https://example.com/image", "content_type": "image/png"}]
         block = {"type": "image", "source": {"data": "test"}}
-        with patch.object(inputs, "_history", return_value=[]), patch.object(inputs, "fetch", return_value=(b"pixels", "image/png")), patch.object(inputs, "image_block", return_value=block), patch.object(inputs, "page_text", return_value=("Article text", None)):
+        with patch.object(inputs, "_history", return_value=[]), patch.object(inputs, "fetch", return_value=(b"pixels", "image/png")), patch.object(inputs, "image_block", return_value=block), patch("links.read_link", return_value={"kind": "web_page", "text": "Article text", "images": [], "links": []}):
             images, texts, _ = inputs.collect({"kind": "message", "message": target, "channel_id": "789"})
         self.assertEqual(images, [block])
         self.assertIn("Article text", "\n".join(texts))
@@ -74,6 +74,33 @@ class ContextTests(unittest.TestCase):
             images, texts, _ = inputs.collect({"kind": "message", "message": target, "channel_id": "789"})
         self.assertEqual(images, [block])
         self.assertIn("A chart", "\n".join(texts))
+
+    def test_shared_post_link_brings_its_text_images_and_source(self):
+        page = {"kind": "x_post", "text": "X (Twitter) post by Garry Tan (@garrytan)\nText:\nShip it", "links": [],
+                "images": [{"url": "https://pbs.twimg.com/media/a.jpg", "caption": "Photo from the linked X post",
+                            "credit": "@garrytan (X)", "source_url": "https://x.com/garrytan/status/1"}]}
+        own = post(300, "https://fixvx.com/garrytan/status/2109410082769482174 че это значит")
+        block = {"type": "image", "source": {"data": "test"}}
+        job = {"kind": "query", "text": own["content"], "message": own, "channel_id": "789"}
+        with patch("links.read_link", return_value=page) as read, patch.object(inputs, "fetch", return_value=(b"pixels", "image/jpeg")), patch.object(inputs, "image_block", return_value=block), patch.object(inputs, "_fingerprint", return_value="a"):
+            images, texts, _ = inputs.collect(job)
+        read.assert_called_once_with("https://fixvx.com/garrytan/status/2109410082769482174")
+        self.assertEqual(images, [block])
+        self.assertIn('kind="x_post" attached_images="1"', "\n".join(texts))
+        self.assertIn("Ship it", "\n".join(texts))
+        self.assertEqual(job["image_meta"][0]["source_url"], "https://x.com/garrytan/status/1")
+        import pipeline
+        _, prompt = pipeline.build_user_content(job, images, texts)
+        self.assertIn(pipeline.LINK_RULE, prompt)
+
+    def test_same_picture_from_preview_and_link_is_kept_once(self):
+        target = post(200, "https://example.com/a")
+        target["embeds"] = [{"url": "https://example.com/a", "image": {"url": "https://cdn.discordapp.com/x.png"}}]
+        page = {"kind": "web_page", "text": "A", "links": [], "images": [{"url": "https://example.com/og.png"}]}
+        block = {"type": "image", "source": {"data": "test"}}
+        with patch.object(inputs, "_history", return_value=[]), patch("links.read_link", return_value=page), patch.object(inputs, "fetch", return_value=(b"pixels", "image/png")), patch.object(inputs, "image_block", return_value=block), patch.object(inputs, "_fingerprint", return_value="same"):
+            images, _, _ = inputs.collect({"kind": "message", "message": target, "channel_id": "789"})
+        self.assertEqual(len(images), 1)
 
 
 if __name__ == "__main__":

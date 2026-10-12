@@ -15,7 +15,15 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
 - Discord attachments are made available to the renderer as image assets.
-- Wikimedia Commons supplies relevant photos/diagrams with source and license information.
+- Shared links are read as content, not as URLs: X/Twitter posts (also via fixvx/fxtwitter/vxtwitter/fixupx/
+  nitter links, through the FxTwitter API with vxTwitter as a fallback) including quoted posts, photos, video
+  preview frames, polls and community notes; Telegram posts; Reddit posts with top comments; YouTube titles,
+  descriptions and thumbnails; and for other pages the article body plus preview image. JavaScript-only pages
+  are retried the way Discord's link-preview crawler sees them.
+- Reference pictures are searched on the web: Wikimedia Commons and Openverse (openly licensed, no key needed),
+  plus optional whole-web search through Brave Search (`BRAVE_SEARCH_API_KEY`) or your own SearXNG
+  (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,
+  describing each one for the scene writer.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.
@@ -229,7 +237,8 @@ with shell tools, plugins, hooks, computer use, and subagents disabled. It recei
 brief and up to two visual references. It has a 210-second deadline. Per-job files are deleted after delivery;
 abandoned results are cleaned up after one hour.
 
-`VISUAL_ASSETS=0` disables visual preparation, `WEB_VISUALS=0` disables Commons image lookup, and
+`VISUAL_ASSETS=0` disables visual preparation, `WEB_VISUALS=0` disables web image lookup
+(`IMAGE_SEARCH_PROVIDERS` picks the sources, `IMAGE_PICKER=0` skips the visual relevance check), and
 `CODEX_IMAGES=0` disables generated illustrations. Missing/unavailable image services fall back to existing
 references and the normal renderer. Use `journalctl -u explain-bot-visuals` for worker status.
 

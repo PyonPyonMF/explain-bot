@@ -4,7 +4,6 @@ text attachments, and (if a bot token is set) the conversation around it.
 All of this is untrusted data. It goes into the prompt inside clearly marked tags.
 """
 import base64
-import html
 import io
 import ipaddress
 import json
@@ -15,7 +14,6 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from html.parser import HTMLParser
 
 log = logging.getLogger("inputs")
 
@@ -71,7 +69,28 @@ def fetch(url, max_bytes=MAX_DOWNLOAD, timeout=10, headers=None):
         return data, (r.headers.get("content-type") or "").split(";")[0].strip().lower()
 
 
+def final_url(url, timeout=10):
+    """Where a share/short link lands after redirects (each hop is checked like fetch)."""
+    _check_host(url)
+    req = urllib.request.Request(url, headers={"user-agent": UA})
+    with _opener.open(req, timeout=timeout) as r:
+        return r.geturl()
+
+
 # --------------------------------------------------------------- images
+def _fingerprint(data):
+    """A tiny average hash: equal for the same picture at different sizes or encodings."""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im.seek(0)
+        pixels = list(im.convert("L").resize((8, 8)).getdata())
+        avg = sum(pixels) / 64
+        return "".join("1" if p > avg else "0" for p in pixels)
+    except Exception:
+        return hash(data)
+
+
 def image_block(data, content_type):
     """Resize to the model's long-edge limit and return a base64 image block, or None."""
     try:
@@ -87,58 +106,6 @@ def image_block(data, content_type):
     except Exception as e:
         log.warning("image skipped (%s): %s", content_type, e)
         return None
-
-
-# ---------------------------------------------------------------- pages
-class _TextExtractor(HTMLParser):
-    SKIP = {"script", "style", "noscript", "svg", "nav", "footer", "header", "form", "aside"}
-
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts, self.skip, self.title, self._in_title, self.meta = [], 0, "", False, {}
-
-    def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag in self.SKIP:
-            self.skip += 1
-        elif tag == "title":
-            self._in_title = True
-        elif tag == "meta":
-            key = (a.get("property") or a.get("name") or "").lower()
-            if key in ("og:title", "og:description", "description", "twitter:description") and a.get("content"):
-                self.meta[key] = a["content"]
-        elif tag in ("p", "br", "li", "h1", "h2", "h3", "h4", "tr", "div", "pre"):
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in self.SKIP and self.skip:
-            self.skip -= 1
-        elif tag == "title":
-            self._in_title = False
-
-    def handle_data(self, data):
-        if self._in_title:
-            self.title += data
-        elif not self.skip:
-            self.parts.append(data)
-
-
-def page_text(url):
-    data, ctype = fetch(url, max_bytes=3 * 1024 * 1024)
-    if ctype.startswith("image/"):
-        return None, image_block(data, ctype)
-    if ctype not in ("text/html", "application/xhtml+xml", "text/plain", "") and not ctype.startswith("text/"):
-        return f"[{url}: content type {ctype}, not read]", None
-    text = data.decode("utf-8", errors="replace")
-    if ctype == "text/plain":
-        return text[:MAX_LINK_CHARS], None
-    p = _TextExtractor()
-    p.feed(text)
-    body = re.sub(r"[ \t\r\f\v]+", " ", "".join(p.parts))
-    body = re.sub(r"\n\s*\n+", "\n", body).strip()
-    head = [p.title.strip()] + [p.meta[k] for k in ("og:title", "og:description", "description") if k in p.meta]
-    out = "\n".join(dict.fromkeys(h for h in head if h)) + "\n\n" + body
-    return html.unescape(out)[:MAX_LINK_CHARS], None
 
 
 # -------------------------------------------------------------- discord
@@ -248,6 +215,24 @@ def collect(job):
 
     # 3. attachments: also retain media from the question and the quoted reply chain.
     # Keep the same total bounds as one post, with the target taking priority.
+    # job["image_meta"][i] says where images[i] came from, for captions and source credits.
+    meta, seen = [], set()
+    job["image_meta"] = meta
+
+    def add_image(data, ctype, info):
+        if len(images) >= MAX_IMAGES:
+            return False
+        key = _fingerprint(data)
+        if key in seen:  # the same picture via a link preview and the link's own media
+            return True
+        blk = image_block(data, ctype)
+        if blk:
+            seen.add(key)
+            images.append(blk)
+            meta.append(info)
+        return bool(blk)
+
+    from_message = {"caption": "Reference supplied in the Discord conversation", "credit": "Референс из сообщения"}
     sources = [msg, job.get("request_message") or {}, *reversed(parents)]
     attachments = [a for source in sources for a in source.get("attachments") or []][:10]
     embeds = [e for source in sources for e in source.get("embeds") or []][:5]
@@ -260,9 +245,7 @@ def collect(job):
         try:
             if ctype.startswith("image/") and len(images) < MAX_IMAGES:
                 data, _ = fetch(url)
-                blk = image_block(data, ctype)
-                if blk:
-                    images.append(blk)
+                add_image(data, ctype, from_message)
             elif name.lower().endswith(TEXT_EXT) and (a.get("size") or 0) < 500_000:
                 data, _ = fetch(url, max_bytes=500_000)
                 texts.append(f"<attachment name=\"{name}\">\n{data.decode('utf-8', 'replace')[:MAX_FILE_CHARS]}\n</attachment>")
@@ -270,31 +253,53 @@ def collect(job):
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype or '?'}\">[not read]</attachment>")
         except Exception as e:
             log.warning("attachment %s skipped: %s", name, e)
-    for e in embeds:  # images in link previews / image embeds
+
+    # 4. linked pages (from the post, or from the query). Site readers return the post/article itself,
+    # so "what does this mean + link" explains the content behind the link, not the URL.
+    import links
+    source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
+    queue = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
+    opened = set()
+    while queue and len(opened) < MAX_LINKS + 1:  # one extra slot for a link found inside a linked post
+        u = queue.pop(0)
+        if u in opened:
+            continue
+        opened.add(u)
+        try:
+            page = links.read_link(u)
+        except Exception as e:
+            log.warning("link %s skipped: %s", u, e)
+            texts.append(f"<linked_page url=\"{u}\">[could not open: {type(e).__name__}]</linked_page>")
+            continue
+        n_before = len(images)
+        if page.get("image_data"):
+            add_image(page["image_data"], "image/*", page["image_meta"])
+        for ref in page.get("images") or []:
+            if len(images) >= MAX_IMAGES:
+                break
+            try:
+                data, ct = fetch(ref["url"])
+                add_image(data, ct, {k: ref.get(k, "") for k in ("caption", "credit", "source_url")})
+            except Exception as ex:
+                log.warning("linked image skipped: %s", ex)
+        attached = len(images) - n_before
+        note = f" attached_images=\"{attached}\"" if attached else ""
+        if page.get("text"):
+            texts.append(f"<linked_page url=\"{u}\" kind=\"{page.get('kind', 'web_page')}\"{note}>\n{page['text']}\n</linked_page>")
+        queue += [x.rstrip(".,;:!?)»") for x in page.get("links") or []][:2]
+        log.info("link %s read as %s (%d chars, %d images)", u, page.get("kind"), len(page.get("text") or ""), attached)
+
+    for e in embeds:  # Discord link previews / image embeds fill the remaining image slots
         for key in ("image", "thumbnail"):
             u = (e.get(key) or {}).get("url")
             if u and len(images) < MAX_IMAGES:
                 try:
                     data, ct = fetch(u)
-                    blk = image_block(data, ct)
-                    if blk:
-                        images.append(blk)
+                    add_image(data, ct, {"caption": e.get("title") or "Link preview image from the Discord message",
+                                         "credit": (e.get("provider") or {}).get("name") or "Референс из сообщения",
+                                         "source_url": e.get("url") or ""})
                     break
                 except Exception as ex:
                     log.warning("embed image skipped: %s", ex)
-
-    # 4. linked pages (from the post, or from the query)
-    source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
-    urls = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
-    for u in urls:
-        try:
-            txt, img = page_text(u)
-            if img and len(images) < MAX_IMAGES:
-                images.append(img)
-            if txt:
-                texts.append(f"<linked_page url=\"{u}\">\n{txt}\n</linked_page>")
-        except Exception as e:
-            log.warning("link %s skipped: %s", u, e)
-            texts.append(f"<linked_page url=\"{u}\">[could not open: {type(e).__name__}]</linked_page>")
 
     return images, texts, notes

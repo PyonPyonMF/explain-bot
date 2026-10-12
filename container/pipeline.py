@@ -74,6 +74,14 @@ Reply with ONE JSON object and nothing else (no prose, no code fence). It must m
 """
 
 
+LINK_RULE = """A link in the post or request points AT the material to explain. "What does this mean? <link>" asks
+about the content behind the link: the post, article or video in <linked_page> (with its attached images), not
+the URL. Never explain the URL, its domain or link-mirror services (fixvx, fxtwitter, vxtwitter, fixupx are just
+embed proxies for X/Twitter posts) unless the user explicitly asks about the link itself. If a linked page could
+not be opened, say in one sentence that its content was unavailable and explain only what the conversation
+shows; do not guess what it says."""
+
+
 class UserError(Exception):
     pass
 
@@ -114,6 +122,8 @@ def build_user_content(job, images, texts):
     else:
         parts.append(f"Explain this request from a Discord user.\n<request>\n{job['text']}\n</request>")
     parts += texts
+    if any(t.startswith("<linked_page") for t in texts):
+        parts.append(LINK_RULE)
     if job.get("visual_strategy"):
         parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
