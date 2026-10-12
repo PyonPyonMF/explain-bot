@@ -379,7 +379,7 @@ class _TextExtractor(HTMLParser):
     SKIP = {"script", "style", "noscript", "svg", "nav", "footer", "header", "form", "aside", "template"}
     MAIN = {"article", "main"}
     META = ("og:title", "og:description", "description", "twitter:description", "og:site_name",
-            "og:image", "twitter:image", "og:image:alt")
+            "og:image", "twitter:image", "og:image:alt", "og:video", "og:video:secure_url", "og:video:url", "keywords")
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -437,7 +437,7 @@ def _parse_html(raw):
 def read_generic(url):
     data, ctype = fetch(url, max_bytes=3 * 1024 * 1024)
     if ctype.startswith("image/"):
-        return {"kind": "image", "text": "", "links": [], "image_data": data,
+        return {"kind": "image", "text": "", "links": [], "image_data": data, "image_type": ctype,
                 "images": [], "image_meta": {"caption": "Image from the shared link", "credit": _host(url), "source_url": url}}
     if ctype not in ("text/html", "application/xhtml+xml", "") and not ctype.startswith("text/"):
         return {"kind": "file", "text": f"[{url}: content type {ctype}, not read]", "images": [], "links": []}
@@ -468,7 +468,37 @@ def read_generic(url):
     return {"kind": "web_page", "text": text[:MAX_LINK_CHARS], "images": images, "links": []}
 
 
-READERS = (read_x, read_telegram, read_reddit, read_youtube)
+# ---------------------------------------------------------------- GIF sites
+def read_gif(url):
+    """Tenor/Giphy pages: the uploader's title and tags say which film/meme a reaction GIF comes from."""
+    from inputs import gif_title
+    title = gif_title(url)
+    if not title:
+        return None
+    site = "Tenor" if "tenor.com" in url else "Giphy"
+    lines, images = [f"Reaction GIF on {site}" + (f", titled \"{title}\"" if title != "untitled" else "")], []
+    try:
+        raw, _ = fetch(url, max_bytes=3 * 1024 * 1024)
+        p, _ = _parse_html(raw)
+        if p.meta.get("og:title"):
+            lines.append("Page title: " + p.meta["og:title"])
+        if p.meta.get("og:description"):
+            lines.append("Description: " + p.meta["og:description"])
+        if p.meta.get("keywords"):
+            lines.append("Tags: " + p.meta["keywords"][:300])
+        media = (p.meta.get("og:video:secure_url") or p.meta.get("og:video") or p.meta.get("og:video:url")
+                 or p.meta.get("og:image"))
+        if media:
+            media = urllib.parse.urljoin(url, html.unescape(media))
+            images.append({"url": media, "caption": f"GIF from {site}" + (f" titled \"{title}\"" if title != "untitled" else ""),
+                           "credit": site, "source_url": url, "type": "video/mp4" if ".mp4" in media else ""})
+    except Exception:
+        pass  # the title from the address still says what the GIF is; the Discord embed brings the frames
+    lines.append("This is a reaction GIF: its frames are attached as a storyboard when available.")
+    return {"kind": "gif", "text": "\n".join(lines), "images": images, "links": []}
+
+
+READERS = (read_x, read_telegram, read_reddit, read_youtube, read_gif)
 
 
 def read_link(url):

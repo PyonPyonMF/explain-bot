@@ -137,7 +137,7 @@ def _option(i, name):
 
 
 def _has_content(m):
-    return bool((m.get("content") or "").strip() or m.get("attachments") or m.get("embeds"))
+    return bool((m.get("content") or "").strip() or m.get("attachments") or m.get("embeds") or m.get("sticker_items"))
 
 
 def trim_message(m, depth=0):
@@ -148,10 +148,13 @@ def trim_message(m, depth=0):
         "author": {"username": (m.get("author") or {}).get("username"), "global_name": (m.get("author") or {}).get("global_name")},
         "attachments": [{k: a.get(k) for k in ("url", "proxy_url", "filename", "content_type", "size")}
                         for a in (m.get("attachments") or [])[:10]],
-        "embeds": [{"title": e.get("title"), "description": (e.get("description") or "")[:1000], "url": e.get("url"),
+        "embeds": [{"type": e.get("type"), "title": e.get("title"), "description": (e.get("description") or "")[:1000],
+                    "url": e.get("url"), "provider": {"name": (e.get("provider") or {}).get("name")},
                     "image": {"url": e["image"]["url"]} if (e.get("image") or {}).get("url") else None,
-                    "thumbnail": {"url": e["thumbnail"]["url"]} if (e.get("thumbnail") or {}).get("url") else None}
+                    "thumbnail": {"url": e["thumbnail"]["url"]} if (e.get("thumbnail") or {}).get("url") else None,
+                    "video": {"url": e["video"]["url"]} if (e.get("video") or {}).get("url") else None}
                    for e in (m.get("embeds") or [])[:5]],
+        "sticker_items": [{k: st.get(k) for k in ("id", "name", "format_type")} for st in (m.get("sticker_items") or [])[:3]],
         "message_reference": {k: m["message_reference"].get(k) for k in ("message_id", "channel_id", "type")}
         if m.get("message_reference") else None,
         "referenced_message": trim_message(m.get("referenced_message"), 1) if depth == 0 else None,

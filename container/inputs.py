@@ -19,6 +19,8 @@ log = logging.getLogger("inputs")
 
 DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 MAX_IMAGES = 4
+CONTEXT_MEDIA = 2        # pictures/GIFs taken from the recent discussion itself
+CONTEXT_MEDIA_WINDOW = 6  # ... from at most this many latest messages
 MAX_LINKS = 3
 MAX_LINK_CHARS = 6000
 MAX_FILE_CHARS = 6000
@@ -84,11 +86,91 @@ def _fingerprint(data):
         from PIL import Image
         im = Image.open(io.BytesIO(data))
         im.seek(0)
-        pixels = list(im.convert("L").resize((8, 8)).getdata())
+        pixels = list(im.convert("L").resize((8, 8)).tobytes())
         avg = sum(pixels) / 64
         return "".join("1" if p > avg else "0" for p in pixels)
     except Exception:
         return hash(data)
+
+
+VIDEO_TYPES = ("video/mp4", "video/webm", "video/quicktime")
+STORYBOARD_FRAMES = 6
+
+
+def _frames_from_image(data):
+    """Evenly spaced frames of an animated GIF/WebP/APNG, or None for a still image."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(data))
+    n = getattr(im, "n_frames", 1)
+    if n < 2:
+        return None
+    count = min(STORYBOARD_FRAMES, n)
+    frames = []
+    for k in range(count):
+        im.seek(min(n - 1, int((k + 0.5) * n / count)))  # mid-points: skips the black fade-in of frame 0
+        frames.append(im.convert("RGB"))
+    return frames
+
+
+def _frames_from_video(data, content_type):
+    import subprocess
+    import tempfile
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "clip" + {"video/webm": ".webm", "video/quicktime": ".mov"}.get(content_type, ".mp4"))
+        with open(src, "wb") as f:
+            f.write(data)
+        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src],
+                               capture_output=True, text=True, timeout=20)
+        duration = float(probe.stdout.strip() or 0)
+        if duration <= 0:
+            return None
+        frames = []
+        for k in range(STORYBOARD_FRAMES):
+            out = os.path.join(d, f"f{k}.png")
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{(k + 0.5) * duration / STORYBOARD_FRAMES:.3f}",
+                            "-i", src, "-frames:v", "1", "-vf", "scale=640:-2", out], timeout=30, check=False)
+            if os.path.exists(out):
+                with Image.open(out) as im:
+                    frames.append(im.convert("RGB"))
+        return frames or None
+
+
+def storyboard(data, content_type):
+    """One numbered contact sheet for an animated GIF/sticker or a short video: (jpeg bytes, frames) or None."""
+    from PIL import Image, ImageDraw, ImageFont
+    try:
+        if content_type in VIDEO_TYPES:
+            frames = _frames_from_video(data, content_type)
+        else:
+            frames = _frames_from_image(data)
+    except Exception as e:
+        log.warning("storyboard skipped (%s): %s", content_type, e)
+        return None
+    if not frames:
+        return None
+    cols = 3 if len(frames) > 4 else 2 if len(frames) > 1 else 1
+    rows = -(-len(frames) // cols)
+    w = min(512, max(f.width for f in frames))  # small GIFs are not padded into large empty tiles
+    h = min(512, max(1, round(w * frames[0].height / max(1, frames[0].width))))
+    pad = 8
+    sheet = Image.new("RGB", (cols * (w + pad) + pad, rows * (h + pad) + pad), (24, 24, 28))
+    draw = ImageDraw.Draw(sheet)
+    try:
+        font = ImageFont.load_default(size=28)
+    except TypeError:
+        font = ImageFont.load_default()
+    for k, frame in enumerate(frames):
+        frame = frame.copy()
+        frame.thumbnail((w, h))
+        x = pad + (k % cols) * (w + pad) + (w - frame.width) // 2
+        y = pad + (k // cols) * (h + pad) + (h - frame.height) // 2
+        sheet.paste(frame, (x, y))
+        draw.rectangle((x, y, x + 34, y + 34), fill=(0, 0, 0))
+        draw.text((x + 9, y + 2), str(k + 1), fill=(255, 220, 80), font=font)
+    out = io.BytesIO()
+    sheet.save(out, "JPEG", quality=85)
+    return out.getvalue(), len(frames)
 
 
 def image_block(data, content_type):
@@ -130,14 +212,33 @@ def _author(m):
     return a.get("global_name") or a.get("username") or "?"
 
 
+GIF_URL = re.compile(r"https?://(?:www\.)?(?:tenor\.com/(?:[a-z]{2}(?:-[A-Z]{2})?/)?view/|giphy\.com/gifs/)([^\s/?#]+)")
+
+
+def gif_title(url):
+    """'https://tenor.com/view/tony-soprano-stare-gif-123' -> 'tony soprano stare' (the uploader's own title)."""
+    m = GIF_URL.match(url or "")
+    if not m:
+        return None
+    words = [w for w in m.group(1).split("-") if w and not w.isdigit() and not re.fullmatch(r"[A-Za-z0-9]{12,}", w)]
+    if words and words[-1].lower() == "gif":
+        words.pop()
+    return " ".join(words) or "untitled"
+
+
 def _one_line(m, limit=MAX_CONTEXT_MSG_CHARS):
-    text = (m.get("content") or "").strip()
+    text = GIF_URL.sub(lambda g: f"[GIF: {gif_title(g.group(0))}]", (m.get("content") or "").strip())
     for e in m.get("embeds") or []:
+        if gif_title(e.get("url")) or e.get("type") == "gifv":
+            continue  # already shown as [GIF: ...]
         bits = [e.get("title"), e.get("description"), e.get("url")]
         text += "\n" + " — ".join(b for b in bits if b)
     names = [a.get("filename") for a in m.get("attachments") or [] if a.get("filename")]
     if names:
         text += "\n[attachments: " + ", ".join(names) + "]"
+    stickers = [s.get("name") for s in m.get("sticker_items") or [] if s.get("name")]
+    if stickers:
+        text += "\n[sticker: " + ", ".join(stickers) + "]"
     text = text.strip() or "[no text]"
     if len(text) > limit:
         text = text[: limit - 1] + "…"
@@ -169,6 +270,36 @@ def _reply_chain(msg, channel_id):
         parents.append(parent)
         msg = parent
     return list(reversed(parents))
+
+
+# ------------------------------------------------------- reaction media
+def _stickers(m):
+    """Discord stickers as (url, type, info). Lottie stickers have no raster form; their name is in the text."""
+    for st in m.get("sticker_items") or []:
+        fmt, sid = int(st.get("format_type") or 1), st.get("id")
+        if not sid or fmt == 3:
+            continue
+        ext = "gif" if fmt == 4 else "png"
+        yield (f"https://media.discordapp.net/stickers/{sid}.{ext}", f"image/{ext}",
+               {"caption": f"Discord sticker \"{st.get('name') or 'sticker'}\""})
+
+
+def _embed_media(e):
+    """Best media of one embed as (url, type, info): the GIF's video first, then its image or thumbnail."""
+    title = gif_title(e.get("url"))
+    provider = (e.get("provider") or {}).get("name")
+    if e.get("type") == "gifv" or title:
+        caption = "GIF" + (f" from {provider}" if provider else "") + (f" titled \"{title}\"" if title and title != "untitled" else "")
+    else:
+        caption = e.get("title") or "Link preview image from the Discord message"
+    info = {"caption": caption, "credit": provider or "Референс из сообщения", "source_url": e.get("url") or ""}
+    video = (e.get("video") or {}).get("url")
+    if video and (e.get("type") == "gifv" or title):
+        yield video, "video/mp4", info
+    for key in ("image", "thumbnail"):
+        u = (e.get(key) or {}).get("url")
+        if u:
+            yield u, "", info
 
 
 # --------------------------------------------------------------- build
@@ -205,12 +336,17 @@ def collect(job):
 
     # 2. the target message itself
     if job.get("kind") == "message":
-        body = (msg.get("content") or "").strip()
+        body = GIF_URL.sub(lambda g: f"[GIF: {gif_title(g.group(0))}] {g.group(0)}", (msg.get("content") or "").strip())
         emb = []
         for e in msg.get("embeds") or []:
+            if e.get("type") == "gifv" or gif_title(e.get("url")):
+                continue
             emb.append(" — ".join(b for b in [e.get("title"), e.get("description"), e.get("url")] if b))
         if emb:
             body += "\n[embeds]\n" + "\n".join(emb)
+        stickers = [st.get("name") for st in msg.get("sticker_items") or [] if st.get("name")]
+        if stickers:
+            body += "\n[sticker: " + ", ".join(stickers) + "]"
         texts.append(f"<post author=\"{_author(msg)}\">\n{body or '[no text]'}\n</post>")
 
     # 3. attachments: also retain media from the question and the quoted reply chain.
@@ -220,7 +356,18 @@ def collect(job):
     job["image_meta"] = meta
 
     def add_image(data, ctype, info):
+        """Stills go in as they are; GIFs, animated stickers and short videos become one numbered storyboard."""
         if len(images) >= MAX_IMAGES:
+            return False
+        ctype = (ctype or "").lower()
+        board = storyboard(data, ctype) if ctype in VIDEO_TYPES or ctype.startswith("image/") else None
+        if board:
+            what = "video" if ctype in VIDEO_TYPES else "animation"
+            info = {**info, "animated": board[1],
+                    "caption": f"{info.get('caption') or 'Animated media'} — storyboard of {board[1]} frames of the "
+                               f"{what} in time order (numbered, left to right, top to bottom)"}
+            data, ctype = board[0], "image/jpeg"
+        elif ctype in VIDEO_TYPES:
             return False
         key = _fingerprint(data)
         if key in seen:  # the same picture via a link preview and the link's own media
@@ -231,6 +378,14 @@ def collect(job):
             images.append(blk)
             meta.append(info)
         return bool(blk)
+
+    def fetch_media(url, ctype_hint, info, max_bytes=MAX_DOWNLOAD):
+        try:
+            data, ct = fetch(url, max_bytes=max_bytes)
+            return add_image(data, ct or ctype_hint, info)
+        except Exception as ex:
+            log.warning("media %s skipped: %s", (url or "")[:80], ex)
+            return False
 
     from_message = {"caption": "Reference supplied in the Discord conversation", "credit": "Референс из сообщения"}
     sources = [msg, job.get("request_message") or {}, *reversed(parents)]
@@ -246,6 +401,11 @@ def collect(job):
             if ctype.startswith("image/") and len(images) < MAX_IMAGES:
                 data, _ = fetch(url)
                 add_image(data, ctype, from_message)
+            elif ctype in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD and len(images) < MAX_IMAGES:
+                data, _ = fetch(url)
+                shown = add_image(data, ctype, {**from_message, "caption": f"Video {name} from the Discord conversation"})
+                texts.append(f"<attachment name=\"{name}\" type=\"{ctype}\">"
+                             f"{'[video: frames are attached as a storyboard image; the sound is not available]' if shown else '[not read]'}</attachment>")
             elif name.lower().endswith(TEXT_EXT) and (a.get("size") or 0) < 500_000:
                 data, _ = fetch(url, max_bytes=500_000)
                 texts.append(f"<attachment name=\"{name}\">\n{data.decode('utf-8', 'replace')[:MAX_FILE_CHARS]}\n</attachment>")
@@ -253,13 +413,16 @@ def collect(job):
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype or '?'}\">[not read]</attachment>")
         except Exception as e:
             log.warning("attachment %s skipped: %s", name, e)
+    for source in sources:
+        for url, ctype, extra in _stickers(source):
+            fetch_media(url, ctype, {**from_message, **extra})
 
     # 4. linked pages (from the post, or from the query). Site readers return the post/article itself,
     # so "what does this mean + link" explains the content behind the link, not the URL.
     import links
     source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
     queue = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
-    opened = set()
+    opened, with_media = set(), set()
     while queue and len(opened) < MAX_LINKS + 1:  # one extra slot for a link found inside a linked post
         u = queue.pop(0)
         if u in opened:
@@ -273,33 +436,48 @@ def collect(job):
             continue
         n_before = len(images)
         if page.get("image_data"):
-            add_image(page["image_data"], "image/*", page["image_meta"])
+            add_image(page["image_data"], page.get("image_type") or "image/*", page["image_meta"])
         for ref in page.get("images") or []:
             if len(images) >= MAX_IMAGES:
                 break
-            try:
-                data, ct = fetch(ref["url"])
-                add_image(data, ct, {k: ref.get(k, "") for k in ("caption", "credit", "source_url")})
-            except Exception as ex:
-                log.warning("linked image skipped: %s", ex)
+            fetch_media(ref["url"], ref.get("type") or "", {k: ref.get(k, "") for k in ("caption", "credit", "source_url")})
         attached = len(images) - n_before
+        if attached:
+            with_media.add(u)
         note = f" attached_images=\"{attached}\"" if attached else ""
         if page.get("text"):
             texts.append(f"<linked_page url=\"{u}\" kind=\"{page.get('kind', 'web_page')}\"{note}>\n{page['text']}\n</linked_page>")
         queue += [x.rstrip(".,;:!?)»") for x in page.get("links") or []][:2]
         log.info("link %s read as %s (%d chars, %d images)", u, page.get("kind"), len(page.get("text") or ""), attached)
 
-    for e in embeds:  # Discord link previews / image embeds fill the remaining image slots
-        for key in ("image", "thumbnail"):
-            u = (e.get(key) or {}).get("url")
-            if u and len(images) < MAX_IMAGES:
-                try:
-                    data, ct = fetch(u)
-                    add_image(data, ct, {"caption": e.get("title") or "Link preview image from the Discord message",
-                                         "credit": (e.get("provider") or {}).get("name") or "Референс из сообщения",
-                                         "source_url": e.get("url") or ""})
-                    break
-                except Exception as ex:
-                    log.warning("embed image skipped: %s", ex)
+    for e in embeds:  # Discord link previews, image embeds and GIFs fill the remaining image slots
+        if e.get("url") in with_media:
+            continue
+        for url, ctype, extra in _embed_media(e):
+            if len(images) >= MAX_IMAGES or fetch_media(url, ctype, {**from_message, **extra}):
+                break
 
+    # 5. pictures, GIFs and stickers posted in the latest messages: "what did he mean by this?" needs to see them
+    taken = 0
+    for m in list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]:
+        if taken >= CONTEXT_MEDIA or len(images) >= MAX_IMAGES:
+            break
+        ts = (m.get("timestamp") or "")[11:16]
+        posted = {"caption": f"Posted by {_author(m)}" + (f" at [{ts}]" if ts else "") + " in the conversation",
+                  "credit": "Референс из сообщения"}
+        candidates = list(_stickers(m)) + [(a.get("url"), (a.get("content_type") or "").lower(), {})
+                                           for a in m.get("attachments") or []
+                                           if (a.get("content_type") or "").lower().startswith("image/")
+                                           or ((a.get("content_type") or "").lower() in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD)]
+        for e in m.get("embeds") or []:
+            candidates += list(_embed_media(e))[:1]
+        for url, ctype, extra in candidates:
+            if url and fetch_media(url, ctype, {**posted, **extra, "caption": posted["caption"] + (
+                    f"; {extra['caption']}" if extra.get("caption") else "")}):
+                taken += 1
+                break
+
+    if meta:
+        listing = "\n".join(f"{k}. {info.get('caption') or 'image'}" for k, info in enumerate(meta, 1))
+        texts.append(f"<attached_images order=\"same as the images above\">\n{listing}\n</attached_images>")
     return images, texts, notes

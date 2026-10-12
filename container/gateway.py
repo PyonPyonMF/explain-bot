@@ -37,6 +37,10 @@ def mention_strings():
     return MENTION_STRINGS.get(os.environ.get("BOT_LANG") or "ru", MENTION_STRINGS["en"])
 
 
+def _list(value):
+    return value if isinstance(value, (list, tuple)) else []
+
+
 def message_payload(message, depth=0):
     """Snapshot only the text/media needed by the renderer, including one cached reply."""
     author = getattr(message, "author", None)
@@ -51,6 +55,8 @@ def message_payload(message, depth=0):
                    "global_name": getattr(author, "global_name", None)},
         "attachments": [a.to_dict() for a in message.attachments],
         "embeds": [e.to_dict() for e in message.embeds],
+        "sticker_items": [{"id": str(st.id), "name": st.name, "format_type": st.format.value}
+                          for st in _list(getattr(message, "stickers", None))],
         "message_reference": ref.to_dict() if ref else None,
         "referenced_message": message_payload(resolved, 1)
         if depth == 0 and isinstance(resolved, discord.Message) else None,

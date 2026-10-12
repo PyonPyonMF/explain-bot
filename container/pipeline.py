@@ -82,6 +82,15 @@ not be opened, say in one sentence that its content was unavailable and explain 
 shows; do not guess what it says."""
 
 
+REACTION_RULE = """GIFs, stickers, memes and reaction images are replies in the conversation. When one matters for
+the request (for example "what did they mean by this?"): describe what it shows (the scene, action, expression;
+an animation is attached as a storyboard of numbered frames in time order), say where it comes from when its
+title, tags or the conversation name the film, show or meme, and explain what the sender meant by posting it in
+reply to the message before it (agreement, mockery, sarcasm, shock, a running joke...). Read the meaning from the
+exchange, not from the picture alone, and say when it is ambiguous. Never identify a real person from their face:
+name someone only if the title, tags or messages name them."""
+
+
 class UserError(Exception):
     pass
 
@@ -124,6 +133,9 @@ def build_user_content(job, images, texts):
     parts += texts
     if any(t.startswith("<linked_page") for t in texts):
         parts.append(LINK_RULE)
+    if any(m.get("animated") for m in job.get("image_meta") or []) or any(
+            marker in t for t in texts for marker in ("[GIF", "[sticker", 'kind="gif"', "Discord sticker")):
+        parts.append(REACTION_RULE)
     if any(t.startswith("<research_reference") for t in texts):
         from research import RULE
         parts.append(RULE)

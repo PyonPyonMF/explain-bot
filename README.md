@@ -10,7 +10,11 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
 - In Gateway mode, `@BigBro объясни градиентный спуск` makes a video directly in the channel.
   Reply to a post with `@BigBro кто тут прав?` to explain that post in context, including its images, links,
   up to four parent replies, and recent discussion. A plain mention explains the recent conversation.
-  Pasted quotes and forwarded posts are also supported. The bot replies with progress, then attaches the video
+  Pasted quotes and forwarded posts are also supported.
+  Reaction GIFs (Tenor/Giphy or uploaded), animated stickers and short videos are shown to the model as one
+  storyboard of six numbered frames, together with the GIF's title and tags, so "@BigBro что он имел ввиду?"
+  explains what the GIF shows and what it answers in the discussion. Pictures and GIFs from the two latest
+  media posts of the recent discussion are included as well. The bot replies with progress, then attaches the video
   to that same reply; it ignores other bots and does not ping participants.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
