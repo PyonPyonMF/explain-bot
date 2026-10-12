@@ -25,6 +25,12 @@ Videos can use actual image references instead of drawing every object with geom
   plus optional whole-web search through Brave Search (`BRAVE_SEARCH_API_KEY`) or your own SearXNG
   (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,
   describing each one for the scene writer.
+- Before the script is written, Sonnet checks the facts the explanation relies on with Anthropic's server-side
+  web search (`web_search` / `web_fetch` tools, same API key), in parallel with the visual preparation. Up to six
+  findings reach the script with their sources; a finding is dropped unless its URL actually came back from
+  the search tools. The sources are listed under the video. `WEB_RESEARCH=0` turns this off;
+  `RESEARCH_MAX_SEARCHES` caps the billed searches per video. Web search must be allowed for the organization
+  in the Anthropic Console.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.

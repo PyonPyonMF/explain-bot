@@ -30,13 +30,13 @@ DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 
 STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
-           "p_visuals": "🖼️ Подбираю референсы и готовлю иллюстрации…",
+           "p_visuals": "🖼️ Проверяю факты, подбираю референсы и иллюстрации…",
            "refused": "⚠️ Не буду это объяснять: {}", "bad_plan": "⚠️ Модель вернула неправильный план видео. Попробуй ещё раз.",
            "too_big": "⚠️ Видео получилось слишком большим для Discord.",
            "p_write": "✍️ Пишу сценарий и анимацию…", "p_review": "🔎 Проверяю кадры (раунд {})…",
            "p_render": "🎬 Рендерю видео…"},
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
-           "p_visuals": "🖼️ Finding references and preparing illustrations…",
+           "p_visuals": "🖼️ Checking facts, finding references and illustrations…",
            "refused": "⚠️ I will not explain this: {}", "bad_plan": "⚠️ The model returned an invalid video plan. Try again.",
            "too_big": "⚠️ The video is too large for Discord.",
            "p_write": "✍️ Writing the script and the animation…", "p_review": "🔎 Checking frames (round {})…",
@@ -124,6 +124,9 @@ def build_user_content(job, images, texts):
     parts += texts
     if any(t.startswith("<linked_page") for t in texts):
         parts.append(LINK_RULE)
+    if any(t.startswith("<research_reference") for t in texts):
+        from research import RULE
+        parts.append(RULE)
     if job.get("visual_strategy"):
         parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
@@ -353,19 +356,36 @@ def discord_video(job, path, title, debug=""):
     _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
 
 
-def handle_job(job):
-    workdir = tempfile.mkdtemp(prefix="job-")
-    try:
-        if os.environ.get("VISUAL_ASSETS", "1") == "1":
-            _safe_text(job, S["p_visuals"])
-            images, texts, notes = collect(job)
+def prepare_sources(job, images, texts, workdir, visuals_on=True):
+    """Web fact-checking and visual references run side by side; either one may fail without the other."""
+    from research import web_research
+    with cf.ThreadPoolExecutor(2) as pool:
+        found = pool.submit(web_research, job, list(images), list(texts))
+        if visuals_on:
             try:
                 from assets import prepare_visuals
                 job["assets"], job["research"] = prepare_visuals(job, images, texts, workdir)
-                for ref in job["research"]:
-                    texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
             except Exception as exc:
                 log.warning("visual preparation skipped: %s", type(exc).__name__)
+        try:
+            checked = found.result()
+        except Exception as exc:
+            log.warning("web research skipped: %s", type(exc).__name__)
+            checked = []
+    checked_urls = {ref["url"] for ref in checked}
+    job["research"] = checked + [ref for ref in job.get("research", []) if ref["url"] not in checked_urls]
+    for ref in job["research"]:
+        texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
+
+
+def handle_job(job):
+    workdir = tempfile.mkdtemp(prefix="job-")
+    try:
+        visuals_on = os.environ.get("VISUAL_ASSETS", "1") == "1"
+        if visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1":
+            _safe_text(job, S["p_visuals"])
+            images, texts, notes = collect(job)
+            prepare_sources(job, images, texts, workdir, visuals_on)
             job["prepared_inputs"] = (images, texts, notes)
         if job.get("render_mode") == "3d":
             from three_d import make_video_3d

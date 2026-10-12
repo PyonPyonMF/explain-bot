@@ -407,4 +407,9 @@ def source_text(job):
         lines.append(f"{ref['title']}: <{ref['url']}>")
     if any(a.get("kind") == "generated" for a in job.get("assets", [])):
         lines.append("Использована AI-иллюстрация.")
-    return "\n".join(dict.fromkeys(lines))[:1400]
+    out = ""
+    for line in dict.fromkeys(lines):  # whole lines only: a cut URL is a broken link
+        if len(out) + len(line) + 1 > 1400:
+            break
+        out += ("\n" if out else "") + line
+    return out
