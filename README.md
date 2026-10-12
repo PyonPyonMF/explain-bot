@@ -15,7 +15,8 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
 - Discord attachments are made available to the renderer as image assets.
-- Shared links are read as content, not as URLs: X/Twitter posts (also via fixvx/fxtwitter/vxtwitter/fixupx/
+- Shared links are read as content, not as URLs: X/Twitter posts and full X Articles (long-reads with their
+  headings, lists, code and images; also via fixvx/fxtwitter/vxtwitter/fixupx/
   nitter links, through the FxTwitter API with vxTwitter as a fallback) including quoted posts, photos, video
   preview frames, polls and community notes; Telegram posts; Reddit posts with top comments; YouTube titles,
   descriptions and thumbnails; and for other pages the article body plus preview image. JavaScript-only pages

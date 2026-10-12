@@ -16,7 +16,9 @@ from html.parser import HTMLParser
 from inputs import MAX_LINK_CHARS, fetch, final_url
 
 DISCORDBOT_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
-MAX_JSON = 2 * 1024 * 1024
+MAX_JSON = 4 * 1024 * 1024
+MAX_ARTICLE_CHARS = 40000  # long-reads are the whole point of the link; about 10k tokens
+MAX_ARTICLE_IMAGES = 3
 URL_RE = re.compile(r"https?://[^\s<>()\"'`]+")
 
 
@@ -53,6 +55,61 @@ def _x_match(url):
     return (m.group("user") or "i", m.group("id")) if m else None
 
 
+def _article(article):
+    """Render an X Article (Draft.js blocks) as readable text and list its pictures in reading order."""
+    content = article.get("content") or {}
+    entity_map = content.get("entityMap") or {}
+    if isinstance(entity_map, list):
+        entity_map = {str(e.get("key")): e.get("value") or {} for e in entity_map}
+    media = {}
+    for m in article.get("media_entities") or []:
+        info = m.get("media_info") or {}
+        url = info.get("original_img_url") or (info.get("preview_image") or {}).get("original_img_url")
+        if url:
+            media[str(m.get("media_id"))] = ("animated image" if info.get("__typename") == "ApiGif" else "image", url)
+    lines, images, number = [], [], 0
+    prefix = {"header-one": "# ", "header-two": "## ", "header-three": "### ", "unordered-list-item": "- ",
+              "blockquote": "> "}
+    for block in content.get("blocks") or []:
+        kind, text = block.get("type"), (block.get("text") or "").rstrip()
+        entities = [entity_map.get(str(r.get("key"))) or {} for r in block.get("entityRanges") or []]
+        if kind == "atomic":
+            for entity in entities:
+                data = entity.get("data") or {}
+                if entity.get("type") == "MEDIA":
+                    for item in data.get("mediaItems") or []:
+                        what, url = media.get(str(item.get("mediaId")), ("image", None))
+                        number += 1
+                        caption = (data.get("caption") or "").strip()
+                        lines.append(f"[{what.capitalize()} {number}" + (f": {caption}" if caption else "") + "]")
+                        if url:
+                            images.append({"url": url, "number": number, "caption": caption, "what": what})
+                elif entity.get("type") == "MARKDOWN" and data.get("markdown"):
+                    lines.append(data["markdown"].strip())
+                elif entity.get("type") == "TWEET" and data.get("tweetId"):
+                    lines.append(f"[Embedded post: https://x.com/i/status/{data['tweetId']}]")
+                elif entity.get("type") == "DIVIDER":
+                    lines.append("---")
+            continue
+        if not text.strip():
+            continue
+        if kind == "ordered-list-item":
+            line = "1. " + text
+        elif kind == "code-block":
+            line = "```\n" + text + "\n```"
+        else:
+            line = prefix.get(kind, "") + text
+        urls = [(e.get("data") or {}).get("url") for e in entities if e.get("type") == "LINK"]
+        if any(urls):
+            line += " (links: " + ", ".join(u for u in urls if u) + ")"
+        lines.append(line)
+    body = "\n".join(lines).strip()
+    if len(body) > MAX_ARTICLE_CHARS:
+        body = body[:MAX_ARTICLE_CHARS] + f"\n[Article cut here: {MAX_ARTICLE_CHARS} of {len(body)} characters shown]"
+    cover = (article.get("cover_media") or {}).get("media_info") or {}
+    return body, images, cover.get("original_img_url")
+
+
 def _fx_post(t, depth=0):
     """Normalise one FxTwitter post (also used for quoted posts)."""
     author = t.get("author") or {}
@@ -64,12 +121,14 @@ def _fx_post(t, depth=0):
     poll = [(c.get("label"), c.get("percentage")) for c in (t.get("poll") or {}).get("choices") or []]
     note = t.get("community_note")
     article = t.get("article") or {}
+    body, article_images, cover = _article(article) if article.get("content") else ("", [], None)
     return {
         "name": author.get("name"), "handle": author.get("screen_name"), "date": t.get("created_at"),
         "text": t.get("text") or (t.get("raw_text") or {}).get("text") or "",
         "reply_to": t.get("replying_to"), "media": media, "poll": poll, "url": t.get("url"),
         "note": note.get("text") if isinstance(note, dict) else note if isinstance(note, str) else None,
-        "article": " — ".join(v for v in (article.get("title"), article.get("preview_text")) if v),
+        "article": {"title": article.get("title") or "", "preview": article.get("preview_text") or "",
+                    "body": body, "images": article_images, "cover": cover} if article else None,
         "stats": {"likes": t.get("likes"), "reposts": t.get("retweets"), "replies": t.get("replies"),
                   "views": t.get("views")},
         "quote": _fx_post(t["quote"], depth + 1) if depth == 0 and isinstance(t.get("quote"), dict) else None,
@@ -87,7 +146,7 @@ def _vx_post(t, depth=0):
     return {
         "name": t.get("user_name"), "handle": t.get("user_screen_name"), "date": t.get("date"),
         "text": t.get("text") or "", "reply_to": t.get("replyingTo"), "media": media, "poll": [], "note": None,
-        "url": t.get("tweetURL"), "article": "",
+        "url": t.get("tweetURL"), "article": None,
         "stats": {"likes": t.get("likes"), "reposts": t.get("retweets"), "replies": t.get("replies"), "views": None},
         "quote": _vx_post(t["qrt"], depth + 1) if depth == 0 and isinstance(t.get("qrt"), dict) else None,
     }
@@ -98,9 +157,18 @@ def _x_text(post, label="X (Twitter) post"):
     lines = [f"{label} by {who or 'unknown author'}" + (f", {post['date']}" if post["date"] else "")]
     if post["reply_to"]:
         lines.append(f"In reply to @{post['reply_to']}")
-    lines.append("Text:\n" + (post["text"].strip() or "[no text]"))
-    if post["article"]:
-        lines.append("Attached article: " + post["article"])
+    article = post["article"]
+    text = post["text"].strip()
+    if article:  # the post text is then only links to the article itself
+        text = " ".join(w for w in text.split() if "/i/article/" not in w)
+    lines.append("Text:\n" + (text or "[no text]"))
+    if article and article["body"]:
+        attached = min(len(article["images"]), MAX_ARTICLE_IMAGES)
+        lines.append(f"<x_article title=\"{article['title']}\">\n# {article['title']}\n\n{article['body']}\n</x_article>"
+                     + (f"\nThe first {attached} article image(s) are attached." if attached else ""))
+    elif article:
+        lines.append("Attached article (only its preview is available): "
+                     + " — ".join(v for v in (article["title"], article["preview"]) if v))
     for k, item in enumerate(post["media"], 1):
         bits = [item["type"]]
         if item["duration"]:
@@ -124,6 +192,15 @@ def _x_text(post, label="X (Twitter) post"):
 
 def _x_images(post, source_url):
     out = []
+    article, credit = post["article"], f"@{post['handle']} (X)" if post["handle"] else "X post"
+    if article:  # the article's own diagrams explain more than its cover
+        for image in article["images"][:MAX_ARTICLE_IMAGES]:
+            caption = f"{image['what'].capitalize()} {image['number']} of the X article \"{article['title']}\""
+            out.append({"url": image["url"], "caption": caption + (f": {image['caption']}" if image["caption"] else ""),
+                        "credit": credit, "source_url": post["url"] or source_url})
+        if article["cover"]:
+            out.append({"url": article["cover"], "caption": f"Cover of the X article \"{article['title']}\"",
+                        "credit": credit, "source_url": post["url"] or source_url})
     for p in (post, post["quote"]) if post["quote"] else (post,):
         credit = f"@{p['handle']} (X)" if p["handle"] else "X post"
         for item in p["media"]:
@@ -151,7 +228,7 @@ def read_x(url):
     post["url"] = post["url"] or f"https://x.com/{user}/status/{status}"
     links = URL_RE.findall(post["text"]) + (URL_RE.findall(post["quote"]["text"]) if post["quote"] else [])
     return {"kind": "x_post", "text": _x_text(post), "images": _x_images(post, url),
-            "links": [u for u in links if not _x_match(u) and _host(u) != "t.co"]}
+            "links": [u for u in links if _host(u) not in X_HOSTS and _host(u) != "t.co"]}
 
 
 # ------------------------------------------------------------------ Telegram
@@ -402,7 +479,8 @@ def read_link(url):
         except Exception:
             result = None
         if result:
-            result["text"] = result["text"][:MAX_LINK_CHARS]
+            limit = MAX_ARTICLE_CHARS + MAX_LINK_CHARS if "<x_article" in result["text"] else MAX_LINK_CHARS
+            result["text"] = result["text"][:limit]
             return result
     return read_generic(url)
 
