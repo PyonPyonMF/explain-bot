@@ -13,7 +13,7 @@ import re
 import urllib.parse
 from html.parser import HTMLParser
 
-from inputs import MAX_LINK_CHARS, fetch, final_url
+from inputs import MAX_DOWNLOAD, MAX_LINK_CHARS, VIDEO_TYPES, fetch, final_url, gif_host, unproxy
 
 DISCORDBOT_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
 MAX_JSON = 4 * 1024 * 1024
@@ -435,10 +435,16 @@ def _parse_html(raw):
 
 
 def read_generic(url):
-    data, ctype = fetch(url, max_bytes=3 * 1024 * 1024)
-    if ctype.startswith("image/"):
-        return {"kind": "image", "text": "", "links": [], "image_data": data, "image_type": ctype,
-                "images": [], "image_meta": {"caption": "Image from the shared link", "credit": _host(url), "source_url": url}}
+    data, ctype = fetch(url, max_bytes=MAX_DOWNLOAD)
+    original, gif_site = unproxy(url), gif_host(url)
+    if ctype.startswith("image/") or ctype in VIDEO_TYPES:
+        # A direct picture, GIF or short clip: inputs.collect turns animations into a storyboard.
+        what = f"Reaction GIF from {gif_site}" if gif_site else "Video from the shared link" if ctype in VIDEO_TYPES else "Image from the shared link"
+        text = (f"{what} (a direct media file without a title: judge it by its frames and the conversation)"
+                if gif_site or ctype in VIDEO_TYPES else "")
+        return {"kind": "gif" if gif_site else "video" if ctype in VIDEO_TYPES else "image", "text": text, "links": [],
+                "image_data": data, "image_type": ctype, "images": [],
+                "image_meta": {"caption": what, "credit": gif_site or _host(original), "source_url": original}}
     if ctype not in ("text/html", "application/xhtml+xml", "") and not ctype.startswith("text/"):
         return {"kind": "file", "text": f"[{url}: content type {ctype}, not read]", "images": [], "links": []}
     if ctype == "text/plain":
@@ -475,7 +481,7 @@ def read_gif(url):
     title = gif_title(url)
     if not title:
         return None
-    site = "Tenor" if "tenor.com" in url else "Giphy"
+    site = "Tenor" if "tenor.com" in url else "Klipy" if "klipy.com" in url else "Giphy"
     lines, images = [f"Reaction GIF on {site}" + (f", titled \"{title}\"" if title != "untitled" else "")], []
     try:
         raw, _ = fetch(url, max_bytes=3 * 1024 * 1024)

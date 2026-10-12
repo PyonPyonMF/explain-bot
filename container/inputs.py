@@ -212,7 +212,23 @@ def _author(m):
     return a.get("global_name") or a.get("username") or "?"
 
 
-GIF_URL = re.compile(r"https?://(?:www\.)?(?:tenor\.com/(?:[a-z]{2}(?:-[A-Z]{2})?/)?view/|giphy\.com/gifs/)([^\s/?#]+)")
+GIF_URL = re.compile(r"https?://(?:www\.)?(?:tenor\.com/(?:[a-z]{2}(?:-[A-Z]{2})?/)?view/|giphy\.com/gifs/"
+                     r"|klipy\.com/(?:gifs|clips|stickers|ai-gifs|static-memes)/)([^\s/?#]+)")
+GIF_MEDIA_HOSTS = {"static.klipy.com": "Klipy", "media.tenor.com": "Tenor", "c.tenor.com": "Tenor",
+                   "media.giphy.com": "Giphy", "i.giphy.com": "Giphy"}
+DISCORD_PROXY = re.compile(r"^https?://(?:images-ext-\d+|media)\.discordapp\.net/external/[^/]+/(https?)/(.+)$")
+
+
+def unproxy(url):
+    """Discord's media proxy wraps the original address: .../external/<sig>/https/static.klipy.com/x.mp4."""
+    m = DISCORD_PROXY.match(url or "")
+    return f"{m.group(1)}://{m.group(2)}" if m else url
+
+
+def gif_host(url):
+    """'Klipy' for a direct GIF/video file on a GIF site (also behind Discord's proxy), else None."""
+    host = (urllib.parse.urlsplit(unproxy(url)).hostname or "").lower()
+    return GIF_MEDIA_HOSTS.get(host) or next((v for k, v in GIF_MEDIA_HOSTS.items() if host.endswith("." + k)), None)
 
 
 def gif_title(url):
@@ -226,11 +242,22 @@ def gif_title(url):
     return " ".join(words) or "untitled"
 
 
+def _gif_text(text, keep_url=False):
+    """Name GIF links the way people see them in Discord: [GIF: title] instead of an address."""
+    text = GIF_URL.sub(lambda g: f"[GIF: {gif_title(g.group(0))}]" + (f" {g.group(0)}" if keep_url else ""), text)
+    return URL_RE.sub(lambda u: (f"[GIF from {gif_host(u.group(0))}]" + (f" {u.group(0)}" if keep_url else ""))
+                      if gif_host(u.group(0)) else u.group(0), text)
+
+
 def _one_line(m, limit=MAX_CONTEXT_MSG_CHARS):
-    text = GIF_URL.sub(lambda g: f"[GIF: {gif_title(g.group(0))}]", (m.get("content") or "").strip())
+    text = _gif_text((m.get("content") or "").strip())
     for e in m.get("embeds") or []:
         if gif_title(e.get("url")) or e.get("type") == "gifv":
-            continue  # already shown as [GIF: ...]
+            content = m.get("content") or ""
+            if not GIF_URL.search(content) and not any(gif_host(u) for u in URL_RE.findall(content)):
+                provider = (e.get("provider") or {}).get("name")
+                text += f"\n[GIF from {provider}]" if provider else "\n[GIF]"
+            continue  # otherwise the content already shows it as [GIF: ...]
         bits = [e.get("title"), e.get("description"), e.get("url")]
         text += "\n" + " — ".join(b for b in bits if b)
     names = [a.get("filename") for a in m.get("attachments") or [] if a.get("filename")]
@@ -287,14 +314,15 @@ def _stickers(m):
 def _embed_media(e):
     """Best media of one embed as (url, type, info): the GIF's video first, then its image or thumbnail."""
     title = gif_title(e.get("url"))
-    provider = (e.get("provider") or {}).get("name")
-    if e.get("type") == "gifv" or title:
+    provider = (e.get("provider") or {}).get("name") or gif_host((e.get("video") or {}).get("url"))
+    gif_like = e.get("type") == "gifv" or title or gif_host((e.get("video") or {}).get("url"))
+    if gif_like:
         caption = "GIF" + (f" from {provider}" if provider else "") + (f" titled \"{title}\"" if title and title != "untitled" else "")
     else:
         caption = e.get("title") or "Link preview image from the Discord message"
     info = {"caption": caption, "credit": provider or "Референс из сообщения", "source_url": e.get("url") or ""}
     video = (e.get("video") or {}).get("url")
-    if video and (e.get("type") == "gifv" or title):
+    if video and gif_like:
         yield video, "video/mp4", info
     for key in ("image", "thumbnail"):
         u = (e.get(key) or {}).get("url")
@@ -336,7 +364,7 @@ def collect(job):
 
     # 2. the target message itself
     if job.get("kind") == "message":
-        body = GIF_URL.sub(lambda g: f"[GIF: {gif_title(g.group(0))}] {g.group(0)}", (msg.get("content") or "").strip())
+        body = _gif_text((msg.get("content") or "").strip(), keep_url=True)
         emb = []
         for e in msg.get("embeds") or []:
             if e.get("type") == "gifv" or gif_title(e.get("url")):

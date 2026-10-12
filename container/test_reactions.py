@@ -119,6 +119,54 @@ class ConversationTests(unittest.TestCase):
         self.assertTrue(interactions._has_content({"sticker_items": [{"id": "1"}]}))
 
 
+KLIPY_PROXY = ("https://images-ext-1.discordapp.net/external/_iBSiSuTD30ZKooLay9bkMGsR8QY-A9tle76Id_Aev4/"
+               "https/static.klipy.com/ii/39f2394ae36df6e199be9eb7c9fa1012/3b/36/cTLtlQjJXDdRrOU1Nw.mp4")
+KLIPY_EMBED = {"type": "gifv", "url": "https://klipy.com/gifs/cute-15", "provider": {"name": "Klipy", "url": "https://klipy.com"},
+               "thumbnail": {"url": "https://static.klipy.com/ii/d7/5b/5b/7ndEhcilPNKJ8O.webp"},
+               "video": {"url": "https://static.klipy.com/ii/d7aec6f6f171607374b2065c836f92f4/5b/5b/7ndEhcilPNKJ8O.mp4"}}
+
+
+class KlipyTests(unittest.TestCase):
+    def test_discord_proxy_link_is_unwrapped_and_named(self):
+        self.assertEqual(inputs.unproxy(KLIPY_PROXY),
+                         "https://static.klipy.com/ii/39f2394ae36df6e199be9eb7c9fa1012/3b/36/cTLtlQjJXDdRrOU1Nw.mp4")
+        self.assertEqual(inputs.gif_host(KLIPY_PROXY), "Klipy")
+        self.assertEqual(inputs._one_line(message(5, "Richard Cruise", KLIPY_PROXY)), "[00:07] Richard Cruise: [GIF from Klipy]")
+        self.assertEqual(inputs.gif_title("https://klipy.com/gifs/cute-15"), "cute")
+        self.assertEqual(inputs.gif_title("https://klipy.com/gifs/stressed-gif-123"), "stressed")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    def test_pasted_klipy_video_link_becomes_a_storyboard(self):
+        """The exact link from the chat: a Klipy mp4 behind Discord's media proxy."""
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=10",
+                            f"{d}/k.mp4"], check=True)
+            with open(f"{d}/k.mp4", "rb") as f:
+                clip = f.read()
+        job = {"kind": "query", "text": KLIPY_PROXY + " че это значит", "message": message(3, "Rager", KLIPY_PROXY + " че это значит")}
+        with patch.object(links, "fetch", return_value=(clip, "video/mp4")) as fetch:
+            images, texts, _ = inputs.collect(job)
+        fetch.assert_called_once()
+        text = "\n".join(texts)
+        self.assertEqual(len(images), 1)
+        self.assertIn('kind="gif" attached_images="1"', text)
+        self.assertIn("Reaction GIF from Klipy", text)
+        self.assertEqual(job["image_meta"][0]["source_url"], inputs.unproxy(KLIPY_PROXY))
+        self.assertEqual(job["image_meta"][0]["animated"], 6)
+        _, prompt = pipeline.build_user_content(job, images, texts)
+        self.assertIn(pipeline.REACTION_RULE, prompt)
+
+    def test_klipy_gif_sent_from_the_picker_in_the_discussion(self):
+        reaction = message(2, "Richard Cruise", "https://klipy.com/gifs/cute-15", embeds=[KLIPY_EMBED])
+        job = {"kind": "query", "text": "что он имел ввиду?", "channel_id": "9", "context_messages": 10, "context_before_id": "3",
+               "message": message(3, "Rager", "что он имел ввиду?")}
+        with patch.object(inputs, "_history", return_value=[reaction]), patch.object(inputs, "fetch", return_value=(gif(), "image/gif")) as fetch:
+            images, texts, _ = inputs.collect(job)
+        self.assertIn("Richard Cruise: [GIF: cute]", "\n".join(texts))
+        fetch.assert_called_once_with(KLIPY_EMBED["video"]["url"], max_bytes=inputs.MAX_DOWNLOAD)
+        self.assertIn('GIF from Klipy titled "cute"', job["image_meta"][0]["caption"])
+
+
 def job_caption(images, texts):
     return next(t for t in texts if t.startswith("<attached_images"))
 
