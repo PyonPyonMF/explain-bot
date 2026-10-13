@@ -120,6 +120,7 @@ def _fx_post(t, depth=0):
         kind = item.get("type") or "photo"
         url = item.get("url") if kind == "photo" else item.get("thumbnail_url")
         media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": item.get("duration"),
+                      "id": str(item.get("id") or ""), "formats": item.get("formats") or item.get("variants") or [],
                       "video_url": item.get("url") if kind in ("video", "gif") and (item.get("format") == "video/mp4"
                           or urllib.parse.urlsplit(item.get("url") or "").path.lower().endswith(".mp4")) else None})
     poll = [(c.get("label"), c.get("percentage")) for c in (t.get("poll") or {}).get("choices") or []]
@@ -150,6 +151,7 @@ def _vx_post(t, depth=0):
         url = item.get("url") if kind == "photo" else item.get("thumbnail_url")
         seconds = (item.get("duration_millis") or 0) / 1000 or None
         media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": seconds,
+                      "id": str(item.get("id") or ""), "formats": item.get("formats") or item.get("variants") or [],
                       "video_url": item.get("url") if kind in ("video", "gif") and
                           urllib.parse.urlsplit(item.get("url") or "").path.lower().endswith(".mp4") else None})
     return {
@@ -184,7 +186,9 @@ def _x_text(post, label="X (Twitter) post"):
             bits.append(f"{int(item['duration']) // 60}:{int(item['duration']) % 60:02d}")
         if item["alt"]:
             bits.append(f"alt text: {item['alt']}")
-        if item["type"] != "photo":
+        if item["type"] == "video":
+            bits.append("speech transcription is supplied separately when available; video frames are inspected only on explicit request")
+        elif item["type"] != "photo":
             bits.append("visual frames and a media_transcript are supplied separately when available; "
                         "only claim to know spoken words if a successful transcript is present")
         lines.append(f"Media {k}: " + ", ".join(bits))
@@ -218,10 +222,14 @@ def _x_images(post, source_url, storyboards=True):
                 if storyboards and item.get("video_url"):
                     out.append({"url": item["video_url"], "type": "video/mp4", "fallback_url": item["url"],
                                 "caption": f"Video from the X post by {credit}", "credit": credit,
-                                "source_url": p["url"] or source_url})
+                                "source_url": p["url"] or source_url,
+                                **({"x_video": {"id": item.get("id"), "duration": item.get("duration"),
+                                                "formats": item.get("formats") or [], "video_url": item["video_url"]}}
+                                   if item["type"] == "video" else {})})
                     if item["url"]:
                         out.append({"url": item["url"], "caption": f"Full-size preview of that X video by {credit}; use this to read small diagram labels",
-                                    "credit": credit, "source_url": p["url"] or source_url})
+                                    "credit": credit, "source_url": p["url"] or source_url,
+                                    **({"x_video_preview": True} if item["type"] == "video" else {})})
                     continue
                 what = "Photo" if item["type"] == "photo" else "Video frame"
                 out.append({"url": item["url"], "caption": f"{what} from the linked X post by {credit}",
@@ -287,7 +295,7 @@ def _x_thread(url, status):
         used += len(section)
         included.append(mid)
         for image in _x_images(post, url, storyboards=True):
-            images.append({**image, "caption": f"Thread post {number}: {image['caption']}"})
+            images.append({**image, "caption": f"Thread post {number}: {image['caption']}", "requested": mid == status})
         links += URL_RE.findall(post["text"]) + (URL_RE.findall(post["quote"]["text"]) if post["quote"] else [])
     warnings = list(dict.fromkeys(warnings))
     coverage = f"Retrieved {len(included)} author post(s) out of {len(ordered)} available in the source response, oldest first."

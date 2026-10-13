@@ -72,7 +72,7 @@ def answer(job):
         russian = P.BOT_LANG == "ru"
         if task == "transcript":
             return _transcript_answer(records, russian)
-        visual_summary = bool(job.get("youtube_frame_analysis") and images)
+        visual_summary = bool(job.get("youtube_frame_analysis") and images and job.get("video_frame_count",len(images))>0)
         if not any(r["status"] == "ok" and r["text"] for r in records) and not visual_summary:
             return _media_failure(records, russian)
         system = SUMMARY_SYSTEM
@@ -85,7 +85,7 @@ def answer(job):
         context += "Discord locale: " + str(job.get("locale") or P.BOT_LANG) + "\n"
         context += "<media_sources>\n" + json.dumps(records, ensure_ascii=False) + "\n</media_sources>"
         if visual_summary:
-            context += "\n" + "\n".join(t for t in texts if t.startswith(("<youtube_visual_samples", "<attached_images")))
+            context += "\n" + "\n".join(t for t in texts if t.startswith(("<youtube_visual_samples", "<video_visual_samples", "<attached_images")))
         else:
             images = []  # Speech-only is the default; no thumbnails or ambient chat pictures.
     else:

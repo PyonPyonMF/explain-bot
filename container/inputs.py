@@ -374,13 +374,15 @@ def collect(job):
     job["primary_youtube"] = document_source is None and any(youtube.video_id(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
     job["youtube_frame_analysis"] = youtube.frames_requested(str(job.get("question") or job.get("text") or ""))
     job["youtube_sources"], job["youtube_errors"] = [], []
+    job["primary_x_video"], job["video_frame_count"] = False, 0
+    job["x_video_sources"], job["media_errors"] = [], []
     request = str(job.get("question") or job.get("text") or "")
     own_media = any(m.get("attachments") or m.get("embeds") for m in (msg, job.get("request_message") or {}))
     contextual = re.search(r"\b(?:тут|здесь|это|этим|этом|он|она|они|обсуждают|this|that|here|he|she|discussion)\b", request, re.I)
     contextual = contextual or request.lower().strip(" ?!.,") in {"why", "почему", "зачем", "what", "что", "как", "how"}
     job["primary_query"] = bool(job.get("kind") == "query" and request.strip() and not own_media and
                                 (URL_RE.search(request) or not contextual))
-    image_limit = youtube.MAX_FRAMES if job["primary_youtube"] and job["youtube_frame_analysis"] else MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
+    image_limit = youtube.MAX_FRAMES if (job["primary_youtube"] or job["primary_x"]) and job["youtube_frame_analysis"] else MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
     job["source_warnings"], job["thread_sources"] = [], []
     transcripts = speech.Collector(job, texts)
 
@@ -572,7 +574,7 @@ def collect(job):
     source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
     queue = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
     opened, with_media = set(), set()
-    youtube_seen = set()
+    youtube_seen, x_video_seen = set(), set()
     while queue and len(opened) < MAX_LINKS + 1:  # one extra slot for a link found inside a linked post
         u = queue.pop(0)
         if u in opened:
@@ -597,7 +599,7 @@ def collect(job):
                 page = youtube.read(u, job, want_frames=request_frames)
                 result = page["transcript"]
                 transcripts.record(result, page["title"] + " — " + canonical)
-                if result.get("status") != "ok":
+                if result.get("status") != "ok" or result.get("error"):
                     job["youtube_errors"].append(youtube.error_message(result.get("error") or ("speech_disabled" if result.get("status") == "disabled" else result.get("status"))))
                 frames = page.get("frames") or []
                 frame_start = len(images)
@@ -605,6 +607,7 @@ def collect(job):
                     add_image(frame["data"], "image/jpeg", {"caption": f"YouTube frame at {frame['seconds']:.3f} seconds from the start of the source video",
                               "credit": "Кадр исходного YouTube-видео", "source_url": canonical}, with_speech=False, deduplicate=False)
                 supplied_frames = len(images)-frame_start
+                job["video_frame_count"] += supplied_frames
                 if page.get("coverage") and supplied_frames:
                     coverage = {**page["coverage"], "sample_count": supplied_frames}
                     texts.append('<youtube_visual_samples>\n' + json.dumps(coverage, ensure_ascii=False) + '\n</youtube_visual_samples>')
@@ -635,7 +638,54 @@ def collect(job):
             job["source_warnings"] += page["thread"].get("warnings") or []
         if page.get("image_data"):
             add_image(page["image_data"], page.get("image_type") or "image/*", page["image_meta"])
-        for ref in page.get("images") or []:
+        references = page.get("images") or []
+        # The explicitly linked post's video gets the speech budget before earlier videos in its thread.
+        references = sorted([r for r in references if r.get("x_video")],key=lambda r:not r.get("requested")) + [r for r in references if not r.get("x_video")]
+        for ref in references:
+            if ref.get("x_video_preview"):
+                continue  # A video poster is never a substitute for its speech or requested frames.
+            if ref.get("x_video"):
+                import x_media
+                job["primary_x_video"] = True
+                with_media.add(u)
+                origin = ref.get("source_url") or u
+                if origin not in job["x_video_sources"]: job["x_video_sources"].append(origin)
+                identity = ref["x_video"].get("id") or ref["url"]
+                if identity in x_video_seen: continue
+                x_video_seen.add(identity)
+                if transcripts.count >= speech.MAX_CLIPS:
+                    transcripts.record({"status":"clip_limit"},origin); transcripts.warning("speech_limit")
+                    continue
+                transcripts.count += 1
+                try:
+                    request_frames = job["youtube_frame_analysis"] and len(images)<image_limit
+                    video = x_media.read(ref["x_video"],origin,job,want_frames=request_frames)
+                    result = video["transcript"]
+                    transcripts.record(result,(ref.get("caption") or "X video")+" — "+origin)
+                    if result.get("status")!="ok" or result.get("error"):
+                        job["media_errors"].append(x_media.error_message(result.get("error") or result.get("status")))
+                    frames = video.get("frames") or []
+                    frame_start = len(images)
+                    for frame in frames[:max(0,image_limit-len(images))]:
+                        add_image(frame["data"],"image/jpeg",{"caption":f"X video frame at {frame['seconds']:.3f} seconds from the original recording",
+                                  "credit":ref.get("credit") or "Кадр видео из X","source_url":origin},with_speech=False,deduplicate=False)
+                    supplied = len(images)-frame_start; job["video_frame_count"] += supplied
+                    if supplied and video.get("coverage"):
+                        texts.append('<video_visual_samples>\n'+json.dumps({**video["coverage"],"sample_count":supplied},ensure_ascii=False)+'\n</video_visual_samples>')
+                    if video.get("frame_error"):
+                        job["media_errors"].append(x_media.error_message(video["frame_error"]))
+                    if job["youtube_frame_analysis"] and (not request_frames or supplied<len(frames)):
+                        job["media_errors"].append("Достигнут лимит кадров; не все запрошенные фрагменты включены в разбор.")
+                    texts.append(f'<video_source url="{html.escape(origin,quote=True)}" platform="X">\n'
+                        + f"Duration: {video['duration']:.0f} seconds. Speech is supplied in media_transcript. "
+                        + (f"{supplied} timestamped frame samples were explicitly requested and supplied; intervening frames were not inspected."
+                           if supplied else "No video frames or preview were inspected. Do not infer screen content from the post text.")+'\n</video_source>')
+                except Exception as exc:
+                    code = str(exc) if isinstance(exc,(x_media.XMediaError,youtube.YouTubeError)) else type(exc).__name__
+                    log.warning("X video unavailable: %s",code)
+                    transcripts.record({"status":"failed"},origin)
+                    job["media_errors"].append(x_media.error_message(code))
+                continue
             is_media = ref.get("type") in VIDEO_TYPES or str(ref.get("type", "")).startswith("audio/")
             speech_available = is_media and os.environ.get("SPEECH_RECOGNITION", "1") == "1" and transcripts.count < speech.MAX_CLIPS
             if len(images) >= image_limit and not speech_available:
@@ -662,7 +712,7 @@ def collect(job):
         log.info("link %s read as %s (%d chars, %d images)", u, page.get("kind"), len(page.get("text") or ""), attached)
 
     for e in embeds:  # Discord link previews, image embeds and GIFs fill the remaining image slots
-        if job["primary_youtube"] or youtube.video_id(e.get("url") or ""):
+        if job["primary_youtube"] or youtube.video_id(e.get("url") or "") or (job["primary_x_video"] and links._x_match(e.get("url") or "")):
             continue
         if e.get("url") in with_media:
             continue

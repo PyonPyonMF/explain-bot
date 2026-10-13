@@ -36,8 +36,9 @@ def reason(text, has_material=False):
     if re.search(rf"\b{action_word}\s+(?:или|or)\s+(?:(?:сделай|кратко)\s+)?{action_word}\b", words):
         return "format"
     from youtube import video_id
+    from links import _x_match
     if has_material and words in ("разбери", "разбери это", "разбери видео", "посмотри", "посмотри это") and any(
-            video_id(u.rstrip(".,;:!?)»")) for u in re.findall(r"https?://[^\s<>]+", text)):
+            video_id(u.rstrip(".,;:!?)»")) or _x_match(u.rstrip(".,;:!?)»")) for u in re.findall(r"https?://[^\s<>]+", text)):
         return None
     if mention_mode(text)[1] == "3d" or text_task(text) != "explain" or response_format(text) == "text":
         return None

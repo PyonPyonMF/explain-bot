@@ -1,8 +1,9 @@
 """Bounded, channel-scoped memory for video follow-ups. Never persist Discord/API credentials."""
 import base64
 import json
+import re
 
-MAX_SOURCE_CHARS = 160_000
+MAX_SOURCE_CHARS = 500_000
 MAX_IMAGE_CHARS = 1_000_000
 MAX_NATIVE_CHARS = 1_000_000
 MAX_TURNS = 8
@@ -72,6 +73,8 @@ def _source(job, prepared):
             "primary_query": bool(job.get("primary_query")),
             "primary_youtube": bool(job.get("primary_youtube")), "youtube_sources": job.get("youtube_sources") or [],
             "youtube_errors": job.get("youtube_errors") or [],
+            "primary_x_video": bool(job.get("primary_x_video")), "x_video_sources": job.get("x_video_sources") or [],
+            "media_errors": job.get("media_errors") or [],
             "source_warnings": list(dict.fromkeys(job.get("source_warnings") or [])),
             "thread_sources": job.get("thread_sources") or [],
             "truncated": used_chars > MAX_SOURCE_CHARS or len(kept_texts) < len(source_texts) or len(kept_images) < len(images)}
@@ -124,13 +127,20 @@ def prepare(job, collect):
     source = dict(source)
     youtube_urls = source.get("youtube_sources") or list(dict.fromkeys(u for t in source.get("texts", [])
                      if t.startswith("<linked_page") for u in URL_RE.findall(t) if youtube.video_id(u)))
-    if youtube_urls:
-        source["primary_youtube"] = True
+    x_urls = source.get("x_video_sources") or []
+    if not x_urls and source.get("primary_x"):
+        for text in source.get("texts", []):
+            match = re.match(r'<linked_page url="([^"]+)"',text)
+            if match and re.search(r"\bMedia \d+: video",text):
+                x_urls.append(match[1])
+    media_urls = list(dict.fromkeys(youtube_urls+x_urls))
+    if media_urls:
+        source["primary_youtube"] = bool(youtube_urls)
+        source["primary_x_video"] = bool(x_urls)
         source["images"], source["image_meta"], source["native_images"] = [], [], []
-        source["texts"] = [t for t in source.get("texts", []) if not t.startswith(("<youtube_visual_samples", "<attached_images"))]
-        if (youtube.frames_requested(fresh["text"]) or not any(r["status"] == "ok" for r in read_transcripts(source.get("texts", [])))) and not any(
-                youtube.video_id(u) for u in URL_RE.findall(fresh["text"])):
-            fresh["text"] += "\n" + "\n".join(youtube_urls[:2])
+        source["texts"] = [t for t in source.get("texts", []) if not t.startswith(("<youtube_visual_samples", "<video_visual_samples", "<attached_images"))]
+        if (youtube.frames_requested(fresh["text"]) or not any(r["status"] == "ok" and not r["partial"] for r in read_transcripts(source.get("texts", [])))) and not URL_RE.search(fresh["text"]):
+            fresh["text"] += "\n" + "\n".join(media_urls[:2])
     for key in ("response_message_id", "response_channel_id", "application_id", "token"):
         if key in job:
             fresh[key] = job[key]  # Progress only; these credentials are never included in saved source snapshots.
@@ -147,21 +157,38 @@ def prepare(job, collect):
         except (ValueError,TypeError):
             restored_native.append(None)
     job["image_originals"] = ((fresh.get("image_originals") or [None] * len(new_images)) + restored_native)[:image_limit]
-    texts = _without_image_listing(source.get("texts") or []) + _without_image_listing(new_texts)
-    if youtube_urls:
+    old_texts = _without_image_listing(source.get("texts") or [])
+    # A successful reread replaces an older partial transcript of the same source URL.
+    def transcript_url(record):
+        urls=URL_RE.findall(record.get("source") or "")
+        return urls[-1] if urls else None
+    replacements={transcript_url(r):r for r in read_transcripts(new_texts) if r["status"]=="ok" and transcript_url(r)}
+    kept=[]
+    for text in old_texts:
+        records=read_transcripts([text])
+        replacement=replacements.get(transcript_url(records[0])) if records else None
+        if replacement and (not replacement["partial"] or records[0]["partial"]): continue
+        kept.append(text)
+    texts = kept + _without_image_listing(new_texts)
+    if media_urls:
         texts = list(dict.fromkeys(texts))
     if source.get("truncated") or len(all_images) > len(images):
         texts.append("<source_memory_limit>Some original source text or images were not retained. Do not claim to see omitted material.</source_memory_limit>")
     if meta:
         texts.append(_image_listing(meta))
     job["image_meta"] = meta
-    for key in ("primary_document", "primary_x", "primary_query", "primary_youtube"):
+    for key in ("primary_document", "primary_x", "primary_query", "primary_youtube", "primary_x_video"):
         job[key] = bool(source.get(key) or fresh.get(key))
     job["source_warnings"] = list(dict.fromkeys((source.get("source_warnings") or []) + (fresh.get("source_warnings") or [])))
+    if not any(r["partial"] for r in read_transcripts(texts)):
+        job["source_warnings"] = [w for w in job["source_warnings"] if w!="speech_partial"]
     job["thread_sources"] = list(source.get("thread_sources") or []) + (fresh.get("thread_sources") or [])
     job["youtube_sources"] = list(dict.fromkeys(youtube_urls + (fresh.get("youtube_sources") or [])))
     job["youtube_frame_analysis"] = bool(fresh.get("youtube_frame_analysis"))
     job["youtube_errors"] = fresh.get("youtube_errors") or []
+    job["x_video_sources"] = list(dict.fromkeys(x_urls+(fresh.get("x_video_sources") or [])))
+    job["media_errors"] = fresh.get("media_errors") or []
+    job["video_frame_count"] = fresh.get("video_frame_count",len(new_images) if fresh.get("youtube_frame_analysis") else 0)
     return images, texts, list(source.get("notes") or []) + new_notes
 
 

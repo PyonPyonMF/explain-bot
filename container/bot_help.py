@@ -45,7 +45,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
 • **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — видео с хронологией, версиями сторон и выводами.
 • **Разбирать картинки, схемы и GIF:** прикрепи материал или ответь на сообщение с ним. Для картинок могу сделать вертикальное видео с приближениями и выносками.
-• **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, Telegram и Reddit. YouTube — по распознанной речи; кадры только по просьбе `разбери покадрово`.
+• **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, Telegram и Reddit. Видео YouTube и X — по речи; кадры только по просьбе `разбери покадрово`.
 • **Отвечать на уточнения:** ответь на мой результат с упоминанием и новым вопросом. Без упоминания я не вмешиваюсь.
 • **Показывать 3D:** `3d объясни, почему качается маятник`. `/objects` — библиотека 3D-объектов.
 
@@ -71,9 +71,9 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • `сделай транскрипцию видео текстом` — сама расшифровка с таймкодами.
 • `summarize видео` — только краткое резюме речи.
 
-Поддерживаются вложения Discord, голосовые/аудиофайлы, прямые ссылки на медиа и доступные для скачивания ролики X. Я смотрю 6 кадров из разных моментов и распознаю речь; очень быстрые события между кадрами могу пропустить.
-Лимиты: {size} МиБ на файл, первые {seconds} секунд речи, до {clips} записей за запрос. О неполной расшифровке или ошибке сообщаю.
-**YouTube:** пришли ссылку с `разбери`, `summarize` или `сделай транскрипцию`. По умолчанию скачиваю только аудио и читаю речь частями по 5 минут, до 60 минут на ролик. Готовую расшифровку использую повторно.
+Вложения Discord и прямые медиафайлы: до {size} МиБ; видео смотрю по 6 кадрам, речь распознаю частями. Лимит речи — {seconds//60} минут на запись, до {clips} записей за запрос. Неполную обработку отмечаю.
+**YouTube и видео X:** `разбери`, `summarize` или `сделай транскрипцию` со ссылкой. По умолчанию анализирую речь; кадры — по просьбе. До 120 минут на ролик, части по 5 минут; готовую речь использую повторно.
+При недоступности ElevenLabs помогает локальная речь на домашнем компьютере: нужен включённый компьютер. Локальное распознавание не разделяет собеседников; голос озвучки отличается.
 `разбери покадрово 00:10–00:20` дополнительно включает кадры — до 24 снимков из выбранного интервала. Без интервала беру выборку по всему ролику; события между снимками могу пропустить.
 Распознавание может ошибаться; метки говорящих не устанавливают их личности.""",
             "sources": f"""**Картинки, документы и ссылки**
@@ -132,11 +132,11 @@ def help_text(section="overview", locale="ru", bot_id=None):
 
 Команды `объясни текстом`, транскрипции и `summarize` выбирают текстовый ответ.""",
             "limits": f"""**Ограничения**
-• **Видео и аудио:** до {size} МиБ на файл, первые {seconds} секунд речи, максимум {clips} записи за запрос. Видео смотрю по 6 кадрам, а не непрерывно.
+• **Вложения видео и аудио:** до {size} МиБ на файл, до {seconds//60} минут речи, максимум {clips} записи за запрос. Видео смотрю по 6 кадрам.
 • **PDF:** до 10 МиБ, 60 страниц и 120 000 символов текста; до 4 страниц-превью. Сканам нужен текстовый слой.
 • **Треды X:** до 80 постов автора, 80 000 символов и 12 визуальных материалов. Недоступные части отмечаю.
 • **Контекст:** `/explain` может прочитать до 50 сообщений. Для уточнений храню ограниченную историю исходника и ответов; при потере части контекста сообщаю об этом.
-• **YouTube:** до 60 минут речи; кадры только по явной просьбе, до 24 снимков. Прямые эфиры и недоступные ролики не обрабатываются. Повторные вопросы используют кэш расшифровки.
+• **YouTube и видео X:** до 120 минут речи; кадры по явной просьбе, до 24 снимков. Прямые эфиры и недоступные ролики не обрабатываются. Повторные вопросы используют кэш речи.
 • **Очередь:** при занятости или достижении дневного лимита прошу попробовать позже. Справка и `/objects` лимит не расходуют.
 • **Точность:** распознавание речи и объяснения могут ошибаться. Ссылки на источники помогают проверить утверждения.
 
@@ -177,9 +177,9 @@ Reply to the recording and mention me {mention}:
 `transcribe this video` — the transcript itself.
 `summarize this video` — a short summary of the speech.
 
-Supports Discord video/voice/audio attachments, direct media links and downloadable X clips. I inspect six sampled frames and recognize speech; brief visual events can be missed.
-Limits: {size} MiB per file, the first {seconds} seconds of audio, up to {clips} recordings per request. Partial or failed transcription is disclosed.
-**YouTube:** send a link with an explanation, summary or transcription request. Audio only by default, transcribed in five-minute parts for recordings up to 60 minutes. Transcripts are reused.
+Discord attachments and direct media links: {size} MiB per file, up to {seconds//60} minutes of speech and {clips} recordings per request. Attached video gets six sampled frames. Partial transcription is disclosed.
+**YouTube and X video:** send a link with an explanation, summary or transcription request. Speech only by default, in five-minute parts for recordings up to 120 minutes. Transcripts are reused.
+When ElevenLabs is unavailable, local speech needs the home computer online. Local recognition does not distinguish speakers; the narration voice differs.
 `analyze frame-by-frame 00:10–00:20` additionally samples up to 24 frames. Without a range, samples span the video; intervening events may be missed. Speaker labels are local to each audio part and do not identify people.""",
             "sources": f"""**Images, files and links**
 Attach a source and mention me {mention}, or reply to its message.
@@ -233,7 +233,7 @@ Text, transcript and summary instructions return text.""",
 • PDF: 10 MiB, 60 pages, 120,000 text characters and four page previews. A text layer is required.
 • X threads: 80 author posts, 80,000 characters and 12 visual inputs. Missing content is disclosed.
 • Context: `/explain` can read up to 50 recent messages. Follow-ups retain a bounded source and answer history.
-• YouTube: up to 60 minutes of speech; up to 24 visual samples only on request. Live streams and unavailable recordings are not processed. Transcripts are cached for follow-ups.
+• YouTube and X video: up to 120 minutes of speech; up to 24 visual samples only on request. Live streams and unavailable recordings are not processed. Transcripts are cached for follow-ups.
 • A queue and daily quota apply to generation. Help and `/objects` do not consume that quota.
 • Speech recognition and explanations can be wrong; use cited sources to check claims.
 

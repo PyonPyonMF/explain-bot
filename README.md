@@ -141,10 +141,36 @@ is transcribed by ElevenLabs Scribe v2 using the existing `ELEVENLABS_API_KEY`. 
 speaker labels accompany the video frames, and are reused by follow-up memory. No transcription is triggered
 for unrelated media picked up from recent chat. Audio is decoded locally to a single 16 kHz track before upload;
 temporary source/audio files are removed after processing. Supported media downloads are capped at 50 MiB,
-with at most two clips transcribed per request and the first 300 seconds of each by default. Duplicate media
+with at most two clips transcribed per request and up to 120 minutes of speech in five-minute chunks. Duplicate media
 within a request is transcribed once. Missing audio, failures and truncated speech are distinguished in the
 model input; failures and limits are also disclosed to the user. Speech recognition is separately billed by ElevenLabs. `SPEECH_RECOGNITION=0` disables it,
-`SPEECH_MAX_SECONDS` changes the per-clip cap (up to 900), and `ELEVENLABS_STT_MODEL` selects the Scribe model.
+`SPEECH_MAX_SECONDS` changes the per-clip cap (up to 7200), and `ELEVENLABS_STT_MODEL` selects the Scribe model.
+
+`STT_PROVIDER` and `TTS_PROVIDER` accept `auto` (default), `elevenlabs`, or `local`. With a configured private
+speech worker, `auto` falls back to local Whisper/Piper on provider quota/authentication/network failure.
+Quota/authentication failures open a shared 24-hour circuit for both services, persisted across bot restarts;
+delete `/data/speech-provider.json` and restart the bot after restoring the provider quota to retry immediately.
+`local` always skips ElevenLabs. A successful fallback continues the original job and caches completed speech
+parts. Local Whisper provides timestamps but does **not** diarize speakers. Piper uses separate Russian and
+English voices (selected by Cyrillic text), and sounds different from the configured ElevenLabs voice.
+
+The optional worker uses `scripts/requirements-speech.txt` in a separate Python 3.11+ environment; it loads
+downloaded model files only and listens on `127.0.0.1:8766`. `scripts/speech_worker.py --config CONFIG` expects
+`token`, `whisper_model` (local faster-whisper model directory), and `voices` (`ru`/`en` ONNX file paths).
+`scripts/speech_supervisor.py` restarts the worker and a private SSH reverse Unix-socket tunnel, requiring
+`ssh_host`, `ssh_key`, `ssh_port`, `known_hosts`, and `remote_socket` in the same private config. On Windows,
+run the supervisor with pythonw in a logon task. Restrict the config/key directory to the owning user and SYSTEM.
+The deployed Windows service uses CPU Whisper small/int8 and Piper Irina/ Lessac medium; models and inference
+stay on the home computer, which must be on and connected. The bot accesses only a bearer-protected Unix socket
+mounted at `/speech-socket`: set `LOCAL_SPEECH_SOCKET=/speech-socket/speech.sock` and the matching
+`LOCAL_SPEECH_TOKEN`. No speech HTTP port is publicly exposed. Model cards stay alongside downloaded voices.
+
+X/Twitter video posts also use audio first: prefer the separate audio rendition from a completed HLS playlist,
+fetch segments from `video.twimg.com` with bounded downloads, then decode local files only. If no audio rendition
+exists, a bounded MP4 download supplies the speech track. Post text is retained; video previews are not analyzed.
+Explicit `покадрово` requests add up to 24 sampled frames with timestamps, as for YouTube. The linked post gets
+priority over other videos in its thread. Completed ASR parts can resume on retry; partial speech is identified
+and never presented as a complete summary. The shared cap is 120 minutes and two recordings per request.
 
 YouTube URLs use **audio first**: `yt-dlp` downloads only the audio track, local FFmpeg decodes five-minute
 16 kHz FLAC chunks, and Scribe returns timestamped speech for the full permitted recording. `summarize URL`,
@@ -155,7 +181,7 @@ up to 24 timestamped frames from that range (roughly two per second for short ra
 bounded samples span the recording. This is a sampled visual analysis, not a guarantee that every frame was
 seen. Negative instructions and quoted command text do not enable it. The default summary remains speech-only;
 an explicit visual request adds only the supplied frames to it. A follow-up can request frames of the original
-YouTube link without resending it. Ordinary explanation/research output remains video unless text is requested.
+YouTube or X link without resending it. Ordinary explanation/research output remains video unless text is requested.
 
 `compose.gateway.yml` self-hosts `bgutil-ytdlp-pot-provider:2.0.2` as the `pot` service, reachable only on the
 Compose network at `http://pot:4416`; it publishes **no host port**. The bot image includes pinned yt-dlp,
@@ -163,7 +189,7 @@ its EJS scripts and Deno. Browser cookies/account credentials are not imported, 
 does not receive Discord, Anthropic or ElevenLabs credentials. Direct/live/private/unavailable media limits
 are reported; PO tokens do not guarantee that YouTube accepts every request.
 
-YouTube defaults: up to 60 minutes per recording (`YOUTUBE_MAX_SECONDS`, bounded 60–7200 seconds), 96 MiB audio,
+YouTube defaults: up to 120 minutes per recording (`YOUTUBE_MAX_SECONDS`, bounded 60–7200 seconds), 192 MiB audio,
 256 MiB video, and the shared two-recording request budget. Live streams are rejected. Source files and completed
 ASR parts are cached under protected `/data/youtube`; repeated requests reuse transcripts, and interrupted ASR
 can resume completed parts on retry. Speaker labels are local to each audio chunk, not persistent identities.

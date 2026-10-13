@@ -18,7 +18,7 @@ import urllib.parse
 
 log = logging.getLogger("youtube")
 CHUNK_SECONDS = 300
-MAX_TEXT = 120_000
+MAX_TEXT = 240_000
 MAX_FRAMES = 24
 CACHE_VERSION = 1
 
@@ -60,7 +60,9 @@ def frame_times(text, duration):
     """A dense explicit range, or bounded samples over the full recording; never claim every frame was read."""
     from render_modes import _request_words
     words = _request_words(text)
-    match = re.search(r"(?<!\d)(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*(\d{1,2}:\d{2}(?::\d{2})?)(?!\d)", words)
+    match = re.search(r"(?<!\d)(\d{1,3}:\d{2}(?::\d{2})?)\s*[-–—]\s*(\d{1,3}:\d{2}(?::\d{2})?)(?!\d)", words)
+    if not match and re.search(r"\d+:[\d:]+\s*[-–—]\s*\d+:",words):
+        raise YouTubeError("invalid_range")
     def seconds(stamp):
         numbers = list(map(int, stamp.split(":")))
         if any(n >= 60 for n in numbers[1:]):
@@ -81,8 +83,8 @@ def limits():
             return max(low, min(high, int(os.environ.get(key) or default)))
         except ValueError:
             return default
-    return {"seconds": bounded("YOUTUBE_MAX_SECONDS", 3600, 60, 7200),
-            "audio_bytes": 96 * 1024**2, "video_bytes": 256 * 1024**2,
+    return {"seconds": bounded("YOUTUBE_MAX_SECONDS", 7200, 60, 7200),
+            "audio_bytes": 192 * 1024**2, "video_bytes": 256 * 1024**2,
             "cache_bytes": bounded("YOUTUBE_CACHE_MB", 512, 128, 4096) * 1024**2,
             "ttl": bounded("YOUTUBE_CACHE_HOURS", 24, 1, 168) * 3600}
 
@@ -132,7 +134,7 @@ def _lock(directory, timeout=300):
 
 def _prune(root, current):
     config = limits()
-    entries = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and re.fullmatch(r"[A-Za-z0-9_-]{11}", p.name)]
+    entries = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and re.fullmatch(r"(?:x-)?[A-Za-z0-9_-]{11}", p.name)]
     sizes = {p: sum(f.stat().st_size for f in p.rglob("*") if f.is_file() and not f.is_symlink()) for p in entries}
     total = sum(sizes.values())
     for path in sorted(entries, key=lambda p:p.stat().st_mtime):
@@ -215,23 +217,24 @@ def _media(vid, kind, directory):
     return directory / saved["filename"]
 
 
-def _transcribe(path, duration, directory, job):
+def _transcribe(path, duration, directory, job, platform="YouTube", offset=0):
     import speech
     model = os.environ.get("ELEVENLABS_STT_MODEL") or "scribe_v2"
     version = hashlib.sha256(f"{CACHE_VERSION}:{model}:{CHUNK_SECONDS}".encode()).hexdigest()[:12]
     parts, languages, completed, error = [], [], 0, None
+    local_used = False
     count = math.ceil(duration/CHUNK_SECONDS)
     for index, start in enumerate(range(0, math.ceil(duration), CHUNK_SECONDS)):
         seconds = min(CHUNK_SECONDS, duration-start)
         cache = directory / f"speech-{version}-{index}.json"
         part = _read(cache)
-        _progress(job, f"🎧 Распознаю речь YouTube: часть {index+1}/{count}…")
+        _progress(job, f"🎧 Распознаю речь {platform}: часть {index+1}/{count}…")
         if part is None:
             try:
                 with tempfile.TemporaryDirectory(prefix="audio-", dir=directory) as work:
                     chunk = Path(work) / "speech.flac"
                     subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-protocol_whitelist", "file,pipe",
-                                    "-ss", str(start), "-i", str(path), "-map", "0:a:0", "-t", str(seconds),
+                                    "-ss", str(start+offset), "-i", str(path), "-map", "0:a:0", "-t", str(seconds),
                                     "-vn", "-ac", "1", "-ar", "16000", "-af", "asetpts=PTS-STARTPTS", "-c:a", "flac", str(chunk)],
                                    capture_output=True, timeout=90, check=True)
                     if chunk.stat().st_size > 32*1024**2:
@@ -239,25 +242,29 @@ def _transcribe(path, duration, directory, job):
                     response = speech.request_transcript(chunk.read_bytes())
                 for word in response.get("words") or []:
                     word["speaker_id"] = f"part{index+1}/" + str(word.get("speaker_id") or "unknown")[:30]
-                part = {"text": speech.timed_text(response, offset=start), "language": str(response.get("language_code") or "unknown")[:16]}
+                part = {"text": speech.timed_text(response, offset=start+offset), "language": str(response.get("language_code") or "unknown")[:16],
+                        "provider":response.get("provider","elevenlabs")}
                 _atomic(cache, part)
             except Exception as exc:
                 error = str(exc)[:100] if isinstance(exc, (YouTubeError, speech.SpeechError)) else type(exc).__name__
-                log.warning("YouTube ASR part unavailable: %s", error)
+                log.warning("%s ASR part unavailable: %s", platform, error)
                 break
         if sum(len(p) for p in parts) + len(part.get("text", "")) > MAX_TEXT:
             error = "text_limit"
             break
         parts.append(part.get("text", ""))
+        local_used = local_used or part.get("provider")=="local-whisper"
         languages.append(part.get("language", "unknown"))
         completed = start+seconds
     text = "\n".join(parts).strip()
     partial = completed < duration-.1
     return {"status": "ok" if text else "failed" if error else "no_speech", "text": text,
+            "error": error,
             "partial": partial, "duration": duration, "seconds": completed,
             "language": languages[0] if languages else "unknown",
             "partial_notice": f"Transcribed {completed:.0f} of {duration:.0f} seconds; remaining speech was not read.",
-            "notice": "Speaker labels are local to each part; equal labels in different parts do not establish identity."}
+            "notice": ("Local Whisper was used for some or all speech. It does not distinguish speakers; unknown labels are not speaker identities. " if local_used else "")+
+                      "Speaker labels are local to each part; equal labels in different parts do not establish identity."}
 
 
 def _frames(path, request, duration, directory):
@@ -330,6 +337,11 @@ def error_message(reason, russian=True):
     if not russian:
         return "YouTube could not be processed (" + str(reason)[:50] + "). No transcript was inferred from its thumbnail or description."
     messages = {"duration_limit": f"Ролик превышает лимит {limits()['seconds']//60} минут. Пришли более короткий фрагмент.",
+                "local_speech_offline": "Локальное распознавание недоступно. Проверь, включён ли домашний компьютер и работает ли служба речи.",
+                "local_speech_failed": "Локальная служба речи не смогла обработать аудио. Попробуй повторить запрос.",
+                "quota_exceeded": "В ElevenLabs закончились кредиты на распознавание и озвучку. Нужна доступная квота сервиса.",
+                "invalid_api_key": "ElevenLabs отклонил API-ключ. Требуется обновить ключ распознавания и озвучки.",
+                "missing_permissions": "У API-ключа ElevenLabs нет нужных прав на распознавание.",
                 "access": "YouTube не разрешил скачать этот ролик. Пришли сам файл или другой доступный источник.",
                 "unavailable": "Ролик YouTube недоступен для скачивания.", "live": "Прямые эфиры пока не обрабатываются; нужна завершённая запись.",
                 "too_large": "Медиафайл YouTube превышает лимит загрузки.", "no_space": "Для загрузки YouTube сейчас недостаточно свободного места.",
