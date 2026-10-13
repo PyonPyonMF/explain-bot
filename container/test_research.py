@@ -38,6 +38,9 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual([t["name"] for t in first["tools"]], ["web_search", "web_fetch"])
         self.assertEqual(first["tools"][0]["type"], "web_search_20260209")
         self.assertEqual(second["messages"][-1]["role"], "assistant")  # the paused turn is continued, not restarted
+        self.assertEqual(first["system"], second["system"])
+        self.assertEqual(first["system"][-1]["cache_control"]["type"], "ephemeral")
+        self.assertNotIn("cache_control", first)  # do not write every unique question at the 1h rate
         self.assertEqual([f["url"] for f in found], ["https://grep.ai/blog/agentrun", "https://news.example/aml"])
         self.assertEqual(found[1]["title"], "AML alerts explained")  # missing title falls back to the search hit
         self.assertIn("95%", found[1]["summary"])

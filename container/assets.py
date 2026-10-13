@@ -17,6 +17,7 @@ import uuid
 from PIL import Image
 
 from inputs import fetch, image_block
+import prompt_cache
 
 log = logging.getLogger("assets")
 UA = "ExplainBot/1.0 (https://github.com/PyonPyonMF/explain-bot)"
@@ -68,13 +69,14 @@ def save_image(data, path):
 
 def _ask_claude(system, content, what, max_tokens=1200):
     import pipeline as P
-    body = {"model": P.ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system,
+    body = {"model": P.ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": prompt_cache.system(system),
             "messages": [{"role": "user", "content": content}]}
     headers = {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01", "content-type": "application/json"}
     if os.environ.get("ANTHROPIC_WORKSPACE_ID"):
         headers["anthropic-workspace-id"] = os.environ["ANTHROPIC_WORKSPACE_ID"]
     _, raw = P._retry(lambda: P._http(P.ANTHROPIC_URL, json.dumps(body).encode(), headers, timeout=60), what, attempts=2)
     reply = json.loads(raw)
+    prompt_cache.record_usage(reply, what)
     return P.parse_json_reply("".join(b.get("text", "") for b in reply.get("content", []) if b.get("type") == "text"))
 
 

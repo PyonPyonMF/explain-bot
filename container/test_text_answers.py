@@ -76,13 +76,14 @@ class TextAnswerTests(unittest.TestCase):
         with patch.object(pipeline, "_http", return_value=(200, json.dumps(response).encode())) as model:
             self.assertEqual(T.answer(job), "A direct text answer.")
         body = json.loads(model.call_args.args[1])
-        self.assertIn("TEXT", body["system"])
+        system = "".join(block["text"] for block in body["system"])
+        self.assertIn("TEXT", system)
         prompt = body["messages"][0]["content"][-1]["text"]
         self.assertIn("Earlier explanation", prompt)
         self.assertIn("Original source", prompt)
         self.assertIn("TEXT ONLY", prompt)
         self.assertNotIn("NEW narrated video", prompt)
-        self.assertNotIn(pipeline.PLAN_SCHEMA_TEXT, body["system"])
+        self.assertNotIn(pipeline.PLAN_SCHEMA_TEXT, system)
 
     def test_cut_off_model_reply_is_retried_instead_of_published(self):
         def response(text, stop):
@@ -90,6 +91,9 @@ class TextAnswerTests(unittest.TestCase):
         with patch.object(pipeline, "_http", side_effect=[response("unfinished", "max_tokens"), response("Complete answer.", "end_turn")]) as model:
             self.assertEqual(T.answer(self.job()), "Complete answer.")
         self.assertEqual(model.call_count, 2)
+        first, retry = (json.loads(call.args[1]) for call in model.call_args_list)
+        self.assertEqual(first["system"][0], retry["system"][0])
+        self.assertNotIn("cache_control", retry["system"][1])
 
     def test_long_answer_keeps_all_text_and_balanced_code_fences(self):
         code = "```python\n" + "".join(f"    value_{i} = {i}\n" for i in range(350)) + "```\nFinal conclusion."

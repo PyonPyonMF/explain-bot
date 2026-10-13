@@ -15,6 +15,7 @@ import uuid
 
 from inputs import AttachmentUnavailable, collect
 from plan import PLAN_SCHEMA_TEXT, PlanError, validate_plan
+import prompt_cache
 
 log = logging.getLogger("pipeline")
 
@@ -187,7 +188,7 @@ def ask_claude(job, inputs, feedback=None):
     # Plain JSON in the reply text. Sonnet 5.5 rejects a forced tool_choice, and the scene schema is too large
     # for constrained output, so validate_plan() checks the reply and make_plan() retries once with feedback.
     body = {
-        "model": ANTHROPIC_MODEL, "max_tokens": 8000, "system": SYSTEM_PROMPT + PLAN_SCHEMA_TEXT,
+        "model": ANTHROPIC_MODEL, "max_tokens": 8000, "system": prompt_cache.system(SYSTEM_PROMPT + PLAN_SCHEMA_TEXT),
         "messages": [{"role": "user", "content": user}],
     }
     headers = {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
@@ -197,6 +198,7 @@ def ask_claude(job, inputs, feedback=None):
     _, raw = _retry(lambda: _http(ANTHROPIC_URL, json.dumps(body).encode(), headers, timeout=180),
                     "anthropic")
     resp = json.loads(raw)
+    prompt_cache.record_usage(resp, "scene plan")
     stop = resp.get("stop_reason")
     text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
     if stop == "refusal":

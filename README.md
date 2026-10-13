@@ -74,6 +74,16 @@ Videos can use actual image references instead of drawing every object with geom
   Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.
 Source links/credits accompany the finished video, and generated illustrations are labeled as such.
 
+Claude requests cache their stable system instructions (including the scene schema and animation API)
+with a one-hour TTL, shared across jobs within the API workspace. Dynamic questions, source material and
+retry feedback stay outside that explicit cache prefix. Web research also benefits from the API's automatic
+caching of server-tool results once caching is enabled. `ANTHROPIC_PROMPT_CACHE=0` disables the markers;
+`ANTHROPIC_CACHE_TTL=5m` selects the shorter lifetime. Short prefixes below the model's minimum are left
+uncached by the API; prompts are never padded. Cache writes cost extra, so savings depend on actual reuse.
+The `claude_usage` log records fresh input, cache writes by TTL, cache reads, output tokens and the percentage
+of input read from cache for each stage, without prompts or credentials. These counters measure reuse,
+not an account-wide savings percentage.
+
 ### Optional 3D classroom mode
 
 Use `@BigBro 3d объясни, почему маятник качается` or `/explain query:... mode:3d`.

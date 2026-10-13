@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+import prompt_cache
 
 log = logging.getLogger("research")
 
@@ -69,12 +70,13 @@ def ask(images, context):
     deadline = time.monotonic() + float(os.environ.get("RESEARCH_TIMEOUT") or 150)
     seen, text = {}, ""
     for _ in range(4):
-        body = {"model": P.ANTHROPIC_MODEL, "max_tokens": 16000, "system": PROMPT, "tools": tools,
+        body = {"model": P.ANTHROPIC_MODEL, "max_tokens": 16000, "system": prompt_cache.system(PROMPT), "tools": tools,
                 "output_config": {"effort": os.environ.get("RESEARCH_EFFORT") or "medium"}, "messages": messages}
         timeout = max(10, deadline - time.monotonic())
         _, raw = P._retry(lambda: P._http(P.ANTHROPIC_URL, json.dumps(body).encode(), _headers(), timeout=timeout),
                           "web research", attempts=2)
         reply = json.loads(raw)
+        prompt_cache.record_usage(reply, "web research")
         content = reply.get("content") or []
         seen.update(_seen_sources(content))
         text = "".join(b.get("text", "") for b in content if b.get("type") == "text")

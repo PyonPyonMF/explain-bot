@@ -3,6 +3,7 @@ import json
 import os
 import re
 import uuid
+import prompt_cache
 
 MAX_ANSWER_CHARS = 12_000
 SYSTEM = """You answer questions for a Discord explanation bot. The user explicitly requested TEXT, so give the
@@ -26,10 +27,11 @@ def answer(job):
         headers["anthropic-workspace-id"] = os.environ["ANTHROPIC_WORKSPACE_ID"]
     for attempt in range(2):
         concise = "\nKeep this answer under 4000 characters and finish all sentences and code blocks." if attempt else ""
-        body = {"model": P.ANTHROPIC_MODEL, "max_tokens": 3000, "system": SYSTEM + concise,
+        body = {"model": P.ANTHROPIC_MODEL, "max_tokens": 3000, "system": prompt_cache.system(SYSTEM, concise),
                 "messages": [{"role": "user", "content": images + [{"type": "text", "text": context}]}]}
         _, raw = P._retry(lambda: P._http(P.ANTHROPIC_URL, json.dumps(body).encode(), headers, timeout=150), "text answer", attempts=2)
         response = json.loads(raw)
+        prompt_cache.record_usage(response, "text answer")
         result = "".join(b.get("text", "") for b in response.get("content", []) if b.get("type") == "text").strip()
         if result and response.get("stop_reason") != "max_tokens" and len(result) <= MAX_ANSWER_CHARS:
             return result

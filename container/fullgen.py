@@ -20,6 +20,7 @@ from inputs import collect
 from plan import clean_text
 import pipeline as P
 import scenes as S
+import prompt_cache
 
 log = logging.getLogger("fullgen")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,7 +159,7 @@ Otherwise reply with the COMPLETE corrected module (the whole file, not a diff):
 
 # ------------------------------------------------------------------ Claude
 def claude(system, content, max_tokens=16000, timeout=420):
-    body = {"model": P.ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": system,
+    body = {"model": P.ANTHROPIC_MODEL, "max_tokens": max_tokens, "system": prompt_cache.system(system),
             "messages": [{"role": "user", "content": content}]}
     headers = {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01",
                "content-type": "application/json"}
@@ -167,6 +168,7 @@ def claude(system, content, max_tokens=16000, timeout=420):
     _, raw = P._retry(lambda: P._http(P.ANTHROPIC_URL, json.dumps(body).encode(), headers, timeout=timeout),
                       "anthropic")
     resp = json.loads(raw)
+    prompt_cache.record_usage(resp, "animation")
     text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
     return text, resp.get("stop_reason")
 
