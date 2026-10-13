@@ -472,6 +472,12 @@ def handle_job(job):
             path, title = make_video_3d(job, workdir, lambda msg: _safe_text(job, msg))
             discord_video(job, path, title)
             return
+        if images and job.get("image_walkthrough") is not False and os.environ.get("IMAGE_WALKTHROUGH", "1") == "1":
+            from image_story import make_video as make_image_video
+            result = make_image_video(job, workdir, lambda msg: _safe_text(job, msg))
+            if result:
+                discord_video(job, *result)
+                return
         path, title, note = None, None, ""
         if os.environ.get("FULL_GEN", "1") == "1":
             from fullgen import FullGenFailed, make_video_fullgen

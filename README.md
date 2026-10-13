@@ -31,6 +31,17 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   they do not wait for an active video render, while sharing the total queue and daily request limit.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
+- When explaining an existing screenshot, diagram, chart or photo, the bot uses a dedicated 720×1280 (9:16)
+  walkthrough: a brief overview, smooth zoom/pan to the relevant region, an outline and one or two short
+  arrow-linked callouts. The source keeps its proportions. Labels are placed away from the highlighted
+  details and the large two-line subtitles; the image is the main visual rather than a small card beside
+  a sidebar. A blurred source backdrop fills the portrait frame during wide overviews. Scene focus and
+  callouts are reviewed against the original image before encoding.
+  Native source pixels are used for close-ups when available; the smaller vision-API thumbnails do not
+  determine render quality. Follow-up memory retains bounded native copies within its existing 2 MB limit.
+  New simulations/diagrams can still use the animation renderer; explicit 3D and text requests keep their own
+  modes. `IMAGE_WALKTHROUGH=0` disables
+  the automatic image-walkthrough route.
 - An explicitly attached PDF is the primary subject: the bot reads its text and up to four labeled page previews.
   Limits are 10 MiB, 60 pages and 120,000 extracted characters. Unrelated chat text and images are excluded for
   document requests. A bare mention with an attachment explains the attachment. If the file cannot be read

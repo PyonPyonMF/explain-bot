@@ -1,8 +1,10 @@
 """Bounded, channel-scoped memory for video follow-ups. Never persist Discord/API credentials."""
+import base64
 import json
 
 MAX_SOURCE_CHARS = 160_000
 MAX_IMAGE_CHARS = 1_000_000
+MAX_NATIVE_CHARS = 1_000_000
 MAX_TURNS = 8
 
 
@@ -37,8 +39,9 @@ def _image_listing(meta):
 
 def _source(job, prepared):
     images, texts, notes = prepared
-    kept_images, kept_meta, used = [], [], 0
+    kept_images, kept_meta, kept_native, used, native_used = [], [], [], 0, 0
     meta = job.get("image_meta") or []
+    originals = job.get('image_originals') or []
     for i, block in enumerate(images):
         source = block.get("source") or {}
         data = source.get("data")
@@ -47,6 +50,13 @@ def _source(job, prepared):
         kept_images.append({"type": "image", "source": {k: source[k] for k in ("type", "media_type", "data") if k in source}})
         info = meta[i] if i < len(meta) else {}
         kept_meta.append({k: info[k] for k in ("caption", "credit", "source_url", "animated") if k in info})
+        native = originals[i] if i < len(originals) else None
+        encoded = base64.b64encode(native).decode() if isinstance(native, bytes) and len(native)*4/3 <= MAX_NATIVE_CHARS-native_used else None
+        if encoded and native_used + len(encoded) <= MAX_NATIVE_CHARS:
+            native_used += len(encoded)
+            kept_native.append(encoded)
+        else:
+            kept_native.append(None)
         used += len(data)
     kept_texts, used_chars = [], 0
     source_texts = _without_image_listing(texts)
@@ -56,7 +66,7 @@ def _source(job, prepared):
             break
         kept_texts.append(text[:remaining])
         used_chars += len(text)
-    return {"images": kept_images, "image_meta": kept_meta, "texts": kept_texts, "notes": list(notes),
+    return {"images": kept_images, "image_meta": kept_meta, "native_images": kept_native, "texts": kept_texts, "notes": list(notes),
             "primary_document": bool(job.get("primary_document")), "primary_x": bool(job.get("primary_x")),
             "source_warnings": list(dict.fromkeys(job.get("source_warnings") or [])),
             "thread_sources": job.get("thread_sources") or [],
@@ -80,9 +90,13 @@ def remember(job):
               "parent_id": job.get("followup_message_id"), "history": history, "history_truncated": shortened,
               "source": _source(job, job.get("prepared_inputs") or ([], [], []))}
     # Unicode-heavy sources must also obey the byte budget, not just the character budget.
+    while len(json.dumps(record, ensure_ascii=False).encode()) > 2_000_000 and any(record['source']['native_images']):
+        biggest = max(range(len(record['source']['native_images'])), key=lambda i:len(record['source']['native_images'][i] or ''))
+        record['source']['native_images'][biggest] = None
     while len(json.dumps(record, ensure_ascii=False).encode()) > 2_000_000 and record["source"]["images"]:
         record["source"]["images"].pop()
         record["source"]["image_meta"].pop()
+        record['source']['native_images'].pop()
         record["source"]["truncated"] = True
     I.state().put_explanation(job["response_channel_id"], job["response_message_id"], record)
 
@@ -104,6 +118,14 @@ def prepare(job, collect):
     all_images = new_images + list(source.get("images") or [])
     all_meta = (fresh.get("image_meta") or []) + list(source.get("image_meta") or [])
     images, meta = all_images[:12], all_meta[:12]
+    source_native = source.get('native_images') or []
+    restored_native = []
+    for i in range(len(source.get('images') or [])):
+        try:
+            restored_native.append(base64.b64decode(source_native[i],validate=True) if i < len(source_native) and source_native[i] else None)
+        except (ValueError,TypeError):
+            restored_native.append(None)
+    job["image_originals"] = ((fresh.get("image_originals") or [None] * len(new_images)) + restored_native)[:12]
     texts = _without_image_listing(source.get("texts") or []) + _without_image_listing(new_texts)
     if source.get("truncated") or len(all_images) > len(images):
         texts.append("<source_memory_limit>Some original source text or images were not retained. Do not claim to see omitted material.</source_memory_limit>")

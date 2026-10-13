@@ -411,9 +411,12 @@ def collect(job):
     # job["image_meta"][i] says where images[i] came from, for captions and source credits.
     meta, seen = [], set()
     job["image_meta"] = meta
+    originals, original_bytes = [], 0
+    job["image_originals"] = originals
 
     def add_image(data, ctype, info):
         """Stills go in as they are; GIFs, animated stickers and short videos become one numbered storyboard."""
+        nonlocal original_bytes
         if len(images) >= image_limit:
             return False
         ctype = (ctype or "").lower()
@@ -434,6 +437,12 @@ def collect(job):
             seen.add(key)
             images.append(blk)
             meta.append(info)
+            # Keep native pixels for close-ups, separately from the smaller vision-API image blocks.
+            # Follow-up memory may retain a bounded native copy separately from the vision blocks.
+            keep = original_bytes + len(data) <= 24 * 1024 * 1024
+            originals.append(data if keep else None)
+            if keep:
+                original_bytes += len(data)
         return bool(blk)
 
     def fetch_media(url, ctype_hint, info, max_bytes=MAX_DOWNLOAD):
