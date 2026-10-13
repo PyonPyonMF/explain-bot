@@ -289,6 +289,32 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.text_submit.assert_not_called()
         msg.reply.assert_not_awaited()
 
+    async def test_help_mention_works_when_busy_without_quota_or_reading_the_reply(self):
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        msg = message("<@999> помощь видео", reference=discord.MessageReference(message_id=100, channel_id=789))
+        with patch.object(I, "state", side_effect=AssertionError("Help must not consume quota")):
+            await self.bot.on_message(msg)
+        msg.reply.assert_awaited_once()
+        self.assertIn("Видео, голосовые", msg.reply.call_args.args[0])
+        self.assertEqual(msg.reply.call_args.kwargs["allowed_mentions"].to_dict()["parse"], [])
+        msg.channel.fetch_message.assert_not_awaited()
+        self.submit.assert_not_called()
+        self.text_submit.assert_not_called()
+
+    async def test_slash_help_is_immediate_private_and_works_when_busy(self):
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        self.assertTrue(self.bot.slots.acquire(blocking=False))
+        i = interaction({"type": 1, "name": "help"})
+        with patch.object(I, "state", side_effect=AssertionError("Help must not consume quota")):
+            await self.bot.on_interaction(i)
+        i.response.defer.assert_not_awaited()
+        i.response.send_message.assert_awaited_once()
+        self.assertTrue(i.response.send_message.call_args.kwargs["ephemeral"])
+        self.assertIn("Что я умею", i.response.send_message.call_args.args[0])
+        self.submit.assert_not_called()
+        self.text_submit.assert_not_called()
+
     async def test_text_followup_reuses_the_video_context(self):
         saved = {"source": {"texts": ["Root source"]}, "history": [{"title": "Reducer", "narration": "Old narration"}]}
         I.state().put_explanation("789", "200", saved)
@@ -482,7 +508,7 @@ class ConfigurationTests(unittest.TestCase):
         with patch.object(gateway, "bot_request") as request:
             gateway.register_commands("test-token", "456")
         commands = request.call_args.args[2]
-        self.assertEqual({c["name"] for c in commands}, {"explain", "objects", "Explain (video)", I.ASK_COMMAND})
+        self.assertEqual({c["name"] for c in commands}, {"help", "explain", "objects", "Explain (video)", I.ASK_COMMAND})
         self.assertTrue(all(c["integration_types"] == [0] and c["contexts"] == [0, 1] for c in commands))
         original = json.loads(Path(gateway.__file__).with_name("commands.json").read_text())
         self.assertEqual(original[0]["integration_types"], [0, 1])

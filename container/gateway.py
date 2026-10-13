@@ -266,6 +266,13 @@ class ExplainBot(discord.Client):
         async def reply(text):
             return await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
 
+        from bot_help import help_text, mention_section
+        own_text = re.sub(rf"<@!?{self.user.id}>", "", message.content).strip()
+        section = mention_section(own_text)
+        if section is not None:
+            await reply(help_text(section, os.environ.get("BOT_LANG") or "ru", self.user.id))
+            return
+
         if not self.slots.acquire(blocking=False):
             await reply(I._S()["busy"])
             return

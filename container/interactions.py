@@ -220,6 +220,11 @@ def handle(i, enqueue):
     d = i.get("data") or {}
     if t == PING:
         return _reply({"type": PONG})
+    if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "help":
+        from bot_help import help_text
+        return _reply({"type": CHANNEL_MESSAGE, "data": {
+            "content": help_text(_option(i, "section") or "overview", os.environ.get("BOT_LANG") or i.get("locale") or "ru", i.get("application_id")),
+            "flags": EPHEMERAL, "allowed_mentions": {"parse": []}}})
     if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "objects":
         from object_library import describe
         return _ephemeral(describe(str(_option(i, "query") or "")[:200]))

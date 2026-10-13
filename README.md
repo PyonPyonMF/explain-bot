@@ -2,6 +2,10 @@
 
 A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like style.
 
+- `/help` (Russian UI: `/помощь`) shows a private feature overview with a `section` / «раздел» selector:
+  text/transcripts/summaries, video/audio, files/links, commands/context, 3D/library and limits.
+  In channel chat, mention the bot with `помощь`, `help`, `что ты умеешь` or a topic such as `помощь видео`.
+  Help is immediate, calls no models, consumes no generation quota and works even when the render queue is full.
 - `/explain query:<text> [messages:<0-50>] [private:true]`: explains a topic or a question. With `messages`, it also
   reads that many recent messages of the channel (for example: `/explain messages:20 query:кто тут прав?`).
   With `private`, only you see the video.
