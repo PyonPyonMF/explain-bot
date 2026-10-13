@@ -43,7 +43,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Отвечать текстом:** `объясни что тут говорят текстом`.
 • **Расшифровывать речь:** `сделай транскрипцию видео текстом` — слова с таймкодами.
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
-• **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — подробный текстовый разбор с хронологией и источниками.
+• **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — видео с хронологией, версиями сторон и выводами.
 • **Разбирать картинки, схемы и GIF:** прикрепи материал или ответь на сообщение с ним. Для картинок могу сделать вертикальное видео с приближениями и выносками.
 • **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, посты Telegram и Reddit. YouTube — пока только описание и обложка.
 • **Отвечать на уточнения:** ответь на мой результат с упоминанием и новым вопросом. Без упоминания я не вмешиваюсь.
@@ -93,11 +93,12 @@ YouTube пока не расшифровываю. Если доступна то
 Или напиши {mention} `рисерч: почему закрылся сервер и как на это повлияла группа? Изучи https://forum.ss13.ru/`.
 Фраза `изучи` со ссылкой на форум тоже включает этот режим.
 
-Несколько раундов поиска: связанные темы, страницы обсуждений, разные написания ников, свидетельства до и после события. Затем — подробный **текстовый** разбор: прямой ответ, участники, хронология, версии сторон, возможные причины и влияние группы, ссылки и пробелы.
+Несколько раундов поиска: связанные темы, страницы обсуждений, разные написания ников, свидетельства до и после события. Затем — **видео с озвучкой**: участники, хронология, версии сторон, возможные причины и влияние группы. Под роликом — несколько ссылок; подробные рабочие заметки в чат не отправляю.
+Текстовый разбор — только по просьбе `рисерч текстом: …` или с `формат:Текст` у `/research`.
 
 Обвинения проверяю как предположения. Отдельно отмечаю слова участников и выводы по источникам; мотивы не выдумываю. Подпись под постом не доказывает историческую роль автора.
 
-Обычно до 10 минут, до 48 обращений к страницам форума и 12 веб-поисков. Показываю ход работы. Если данных не хватит, верну собранное и объясню ограничения; весь форум целиком не обещаю прочитать.
+На поиск и сопоставление — до 10 минут, до 48 обращений к страницам форума и 12 веб-поисков; затем время на озвучку и рендер. Показываю ход работы. При частичных данных обозначу пробелы в видео; если сведений совсем нет, кратко сообщу об этом.
 `private` / «приватно» у slash-команды скрывает результат от остальных. Один запрос расходует один пункт обычного дневного лимита; внешние API оплачиваются владельцем бота.
 Уточнение можно задать ответом на разбор с моим упоминанием.""",
             "context": f"""**Команды и продолжение разговора**
@@ -151,7 +152,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **Text answers:** `explain in text why this works`.
 • **Speech transcripts:** `transcribe this video` — recognized words with timestamps and speaker labels.
 • **Summaries:** `summarize this video` — key points from the speech, not the full transcript.
-• **Deep research:** `/research` or `research: question + forum URL` — a detailed text report with a timeline and citations.
+• **Deep research:** `/research` or `research: question + forum URL` — a narrated video with a timeline, competing accounts and conclusions.
 • **Pictures, diagrams and GIFs:** attach a source or reply to it. Image explanations can use portrait zooms and callouts.
 • **Sources:** PDFs, text/code, web pages, X threads/articles, Telegram and Reddit posts. YouTube currently provides metadata and a thumbnail only.
 • **Follow-ups:** reply to my result with my mention and your next question. No mention means no automatic reply.
@@ -194,10 +195,11 @@ Add `explain in text` for a text explanation. See the Video/audio section for sp
             "research": f"""**Deep forum research**
 Use `/research` with your question and a source URL, or mention {mention}: `research: why did the server close, and what role did this group play? https://forum.example/`.
 
-I search across related topics, spelling variants, pages and accounts before writing a detailed text report: direct answer, public actors, chronology, competing accounts, possible causes, the requested relationships, citations and gaps.
+I search across related topics, spelling variants, pages and accounts, then make a narrated video covering the actors, timeline, competing accounts, causes and conclusions. Only a short caption and a few source links accompany it; detailed working notes stay internal.
+For a written report, explicitly request text or select `format:Text` in `/research`.
 Allegations are hypotheses to check. Participant accounts and tentative inferences stay separate; private motives are not invented.
 
-Default limits: up to 10 minutes, 48 forum page requests and 12 web searches. Progress is shown. If evidence is incomplete, I return the supported material and limits; I do not claim to read the whole archive.
+Research limits: up to 10 minutes, 48 forum page requests and 12 web searches, followed by voice and rendering time. Progress is shown. Partial evidence is qualified in the video; if no usable evidence is found, I return a short notice.
 The slash command's `private` option hides the report from others. Each run uses one normal daily quota unit; external APIs are billed to the bot owner. Reply with my mention for follow-ups.""",
             "context": f"""**Commands and conversation**
 Mention {mention} with your question. Replying targets that message, including forwarded posts and available context.

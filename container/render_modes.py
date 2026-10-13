@@ -60,10 +60,13 @@ def research_requested(text):
 
 def response_format(text):
     """Read explicit format instructions in the caller's words, not in quoted posts or code."""
-    if text_task(text) != "explain":
+    task = text_task(text)
+    if task in ("transcript", "summary"):
         return "text"
     text = _request_words(text)
     verb = r"(?:об[ъь]?ясни(?:ть|те)?|об[ъь]?ясняй(?:те)?|поясни(?:ть|те)?|ответь(?:те)?|ответить|расскажи(?:те)?|напиши(?:те)?)"
+    if task == "research":
+        verb = verb[:-1] + r"|исследуй|изучи|расследуй|рисерч|ресерч|research)"
     fillers = r"(?:пожалуйста|мне|это|только|просто|коротко|подробнее|все|этот\s+(?:тред|пост|код|пример)|эту\s+статью)"
     text_format = r"(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)"
     patterns = [

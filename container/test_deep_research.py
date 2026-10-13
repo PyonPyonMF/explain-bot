@@ -32,7 +32,7 @@ class DeepResearchTests(unittest.TestCase):
                       "Сделай глубокое исследование форума", "какие причины убийства анимуса злофениксом и как гильдия демагогов на это повлияла, изучи https://forum.ss13.ru",
                       "изучи форум https://example.org/", "проведи подробное расследование закрытия сервера"):
             self.assertEqual(text_task(query), "research", query)
-            self.assertEqual(response_format(query), "text", query)
+            self.assertEqual(response_format(query), "video", query)
         for query in ('объясни слово "рисерч"', 'Не проводи исследование', 'не хочу исследование',
                       '> research: history\nОбъясни термин', 'объясни что такое исследование',
                       'найди группу на https://forum.ss13.ru', 'https://example.org/research',
@@ -122,16 +122,66 @@ class DeepResearchTests(unittest.TestCase):
         self.assertIn("showtopic=1", answer)
         self.assertIn("выводы не сформированы", answer)
 
-    def test_pipeline_uses_deep_mode_without_collect_asr_or_render(self):
+    def test_pipeline_uses_deep_mode_then_video_without_second_research_or_collection(self):
         job = {"kind": "query", "text": "research: forum history"}
-        with patch.object(D, "answer", return_value="Detailed report") as deep, patch("text_answers.deliver") as delivery, \
+        def dossier(job, progress):
+            job.update(deep_research_outcome="partial", prepared_inputs=([], ["Opened sources"], []))
+            return "Detailed report with verified chronology"
+        with patch.dict(os.environ, {"FULL_GEN": "1"}), patch.object(D, "answer", side_effect=dossier) as deep, patch("text_answers.deliver") as delivery, \
                 patch.object(P, "collect") as collect, patch.object(P, "prepare_sources") as shallow, \
-                patch.object(P, "research_progress"), patch("fullgen.make_video_fullgen") as render:
+                patch.object(P, "research_progress"), patch.object(P, "_safe_text"), \
+                patch("fullgen.make_video_fullgen", return_value=("result.mp4", "History")) as render, patch.object(P, "discord_video") as upload:
             P.handle_job(job)
         deep.assert_called_once()
-        delivery.assert_called_once_with(job, "Detailed report")
+        delivery.assert_not_called()
         self.assertEqual(job["text_task"], "research")
-        collect.assert_not_called(); shallow.assert_not_called(); render.assert_not_called()
+        self.assertTrue(job["research_video"])
+        self.assertEqual(job["response_format"], "video")
+        collect.assert_not_called(); shallow.assert_not_called(); render.assert_called_once(); upload.assert_called_once()
+        _, prompt = P.build_user_content(job, [], ["Huge raw source archive"])
+        self.assertIn("Detailed report with verified chronology", prompt)
+        self.assertNotIn("Huge raw source archive", prompt)
+
+    def test_explicit_research_text_is_still_available(self):
+        for request in ("рисерч текстом: история сервера", "исследуй историю текстом", "research: history, explain in text"):
+            self.assertEqual(response_format(request), "text", request)
+        self.assertEqual(response_format('рисерч: тема, в посте сказано "ответь текстом"'), "video")
+        self.assertEqual(response_format('рисерч текстом: тема. Лучше видео'), "video")
+        job = {"kind": "query", "text": "рисерч текстом: история сервера"}
+        with patch.object(D, "answer", return_value="Detailed report"), patch("text_answers.deliver") as delivery, \
+                patch.object(P, "research_progress"), patch("fullgen.make_video_fullgen") as render:
+            P.handle_job(job)
+        delivery.assert_called_once_with(job, "Detailed report")
+        render.assert_not_called()
+
+    def test_unavailable_video_research_never_posts_the_long_dossier(self):
+        def failed(job, progress):
+            job.update(deep_research_outcome="unavailable", deep_research_notice="No usable evidence.")
+            return "Very long working notes. " * 1000
+        job = {"kind": "query", "text": "research: history"}
+        with patch.object(D, "answer", side_effect=failed), patch("text_answers.deliver") as delivery, \
+                patch.object(P, "research_progress"), patch.object(P, "_safe_text") as notice, patch("fullgen.make_video_fullgen") as render:
+            P.handle_job(job)
+        delivery.assert_not_called(); render.assert_not_called()
+        notice.assert_called_once_with(job, "No usable evidence.")
+
+    def test_research_narration_preserves_longer_plan_and_rejects_truncated_speech(self):
+        import fullgen as F
+        plan = {"title": "History", "scenes": [{"heading": str(i), "narration": "A" * 260 + "."} for i in range(9)]}
+        text = "<plan>" + json.dumps(plan) + "</plan>"
+        research = F.extract_plan(text, research=True)
+        self.assertEqual(len(research["scenes"]), 9)
+        self.assertGreater(sum(len(s["narration"]) for s in research["scenes"]), 1600)
+        self.assertTrue(all(s["narration"].endswith(".") for s in research["scenes"]))
+        self.assertLessEqual(sum(len(s["narration"]) for s in F.extract_plan(text)["scenes"]), 1600)
+        plan["scenes"][0]["narration"] = "A" * 700
+        with self.assertRaises(F.FullGenFailed):
+            F.extract_plan("<plan>" + json.dumps(plan) + "</plan>", research=True)
+
+    def test_research_caption_has_only_a_few_links(self):
+        from assets import source_text
+        job = {"research_video": True, "research": [{"title": str(i), "url": f"https://forum.example/{i}"} for i in range(20)]}
+        self.assertEqual(source_text(job).count("https://"), 3)
 
     def test_env_limits_cannot_make_work_unbounded(self):
         with patch.dict(os.environ, {"DEEP_RESEARCH_TIMEOUT": "99999", "DEEP_RESEARCH_MAX_PAGES": "-2", "DEEP_RESEARCH_MAX_SEARCHES": "bad"}):

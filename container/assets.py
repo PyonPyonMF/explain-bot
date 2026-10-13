@@ -416,7 +416,7 @@ def source_text(job):
         if asset.get("source_url"):
             credit = " · ".join(v for v in (asset.get("credit"), asset.get("license")) if v)
             lines.append(f"{credit or 'Источник изображения'}: <{asset['source_url']}>")
-    for ref in job.get("research", []):
+    for ref in (job.get("research", [])[:3] if job.get("research_video") else job.get("research", [])):
         lines.append(f"{ref['title']}: <{ref['url']}>")
     if any(a.get("kind") == "generated" for a in job.get("assets", [])):
         lines.append("Использована AI-иллюстрация.")

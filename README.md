@@ -97,24 +97,30 @@ Videos can use actual image references instead of drawing every object with geom
   current signature and member title separately; forum opinions and signatures are not treated as verified
   historical facts. Ordinary research reads at most ten forum pages, with per-page text and byte bounds.
 - **Deep forum research:** `/research` (Russian `/исследование`) takes a question plus public source URL and
-  returns a detailed **text** report. Mention commands `рисерч: ...`, `research: ...`, and a request containing
+  returns a narrated **video** by default. Mention commands `рисерч: ...`, `research: ...`, and a request containing
   `изучи` plus a forum URL also select it. Example: `рисерч: почему закрылся сервер и как на это повлияла группа?
   Изучи https://forum.ss13.ru/`. It searches related topics and spelling variants, follows discussion pages,
   compares contemporary accounts and recollections, and tests the question's premises. Reports cover the direct
   answer, public actors, chronology, causes/competing accounts, requested relationships and unresolved gaps.
+  This detailed dossier stays internal and feeds the video, without a second shallow search. The investigation
+  video uses up to 10 scenes and 3200 narration characters (typically 2–4 minutes), with at most three source
+  links in the caption. Explicit `рисерч текстом: ...`, `explain in text`, or `/research format:text` selects
+  the full written report instead. Mention, slash-command and button entry points share these defaults.
   Factual paragraphs cite IDs assigned to **opened** source posts/pages; search snippets alone are not evidence.
-  Allegations and inferences are labeled. No unrelated chat-media downloads, ASR, TTS or video rendering occur.
-  Progress updates replace the pending message. Default bounds: 600 seconds including report writing, 48 forum
+  Allegations and inferences remain labeled in the video. No unrelated chat-media downloads or ASR occur.
+  Progress updates replace the pending message. Research bounds: 600 seconds including dossier writing, 48 forum
   page requests, 12 web searches, 8 web fetches, 22 tool rounds and 180,000 source characters. Configure
   `DEEP_RESEARCH_TIMEOUT` (120–720), `DEEP_RESEARCH_MAX_PAGES` (8–80), `DEEP_RESEARCH_MAX_SEARCHES` (2–20).
   The run stops when enough evidence has been examined, repeated attempts yield no new evidence, or a bound is
-  reached. Partial evidence is delivered with scope/gaps; it never claims to have exhausted an entire archive.
+  reached. Voice generation and rendering follow research. Partial evidence is narrated with scope/gaps; the bot
+  never claims to have exhausted an entire archive. No usable evidence or a failed synthesis produces only a
+  brief notice, not a long report or fabricated video.
   `/research private:true` keeps the result private. One accepted run uses one normal daily quota unit, but its
   multi-round model/search calls can cost more than an ordinary explanation. `WEB_RESEARCH=0` disables it too.
   Only source domains named by the user or actually observed in public search results are eligible; access
   restrictions and rate limits are respected. Other forum engines can use site-scoped web search; native search
   requires a supported public form or link. An empty search never proves that information does not exist.
-  If the requested entity/cause remains unresolved, the bot gives the supported part briefly and asks for the
+  In ordinary (non-deep) research, if the requested entity/cause remains unresolved, the bot gives the supported part briefly and asks for the
   missing context with an edit/cancel card instead of rendering a video about the question itself. Clarifying
   the same request does not charge its quota twice. Explicit questions are not replaced by unrelated recent GIFs.
 - Questions about a chat reaction (including a reaction to another reply) use an explicit message/reply map,

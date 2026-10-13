@@ -28,6 +28,7 @@ SANDBOX_USER = os.environ.get("SANDBOX_USER", "sandbox")
 REVIEW_ROUNDS = int(os.environ.get("REVIEW_ROUNDS") or 2)
 REVIEW_DEADLINE = 420  # seconds after job start; no new review round after this
 MAX_TOTAL_NARRATION = 1600
+RESEARCH_MAX_NARRATION = 3200
 
 
 class FullGenFailed(Exception):
@@ -184,7 +185,7 @@ def extract_code(text):
     return None
 
 
-def extract_plan(text):
+def extract_plan(text, research=False):
     m = re.search(r"<plan>(.*?)</plan>", text, re.S)
     if not m:
         raise FullGenFailed("no <plan> in the reply")
@@ -193,7 +194,17 @@ def extract_plan(text):
         raise P.UserError(P.S["refused"].format(str(raw["cannot_explain_reason"])[:300]))
     scenes = []
     total = 0
-    for s in (raw.get("scenes") or [])[:8]:
+    if research:
+        supplied = raw.get("scenes") or []
+        if len(supplied) > 10:
+            raise FullGenFailed("research video must contain at most 10 scenes")
+        for s in supplied:
+            narration = clean_text(s.get("narration"), 651).replace("$", "")
+            total += len(narration)
+            if len(narration) > 650 or total > RESEARCH_MAX_NARRATION:
+                raise FullGenFailed("research narration exceeds 650 characters per scene or 3200 total; shorten complete sentences")
+            scenes.append({"heading": clean_text(s.get("heading"), 60), "narration": narration})
+    for s in ([] if research else (raw.get("scenes") or [])[:8]):
         narr = clean_text(s.get("narration"), 400).replace("$", "")
         narr = narr[: max(0, MAX_TOTAL_NARRATION - total)]
         total += len(narr)
@@ -376,16 +387,25 @@ def make_video_fullgen(job, workdir, progress):
     content = (images + visuals if job.get("primary_x") else visuals or images) + [{"type": "text", "text": user_text}]
 
     plan, code, stop = None, None, None
+    research = bool(job.get("research_video"))
+    system = GEN_SYSTEM
+    if research:
+        system = system.replace("4 to 7 scenes. Total narration 90 to 220 words (40 to 90 seconds).",
+            "6 to 10 scenes for a rich investigation, fewer if evidence is sparse. Aim for 220 to 380 words, "
+            "at most 3200 narration characters overall and 650 per scene (roughly 2 to 4 minutes). "
+            "Preserve the key chronology, conflicting accounts and supported conclusions; do not pad gaps.")
     for attempt in range(2):
         try:
-            text, stop = claude(GEN_SYSTEM, content)
-            plan = extract_plan(text)
+            text, stop = claude(system, content)
+            plan = extract_plan(text, research=research)
             code = extract_code(text)
             if code:
                 break
             log.warning("generation attempt %d: no code (stop=%s)", attempt, stop)
         except FullGenFailed as e:
             log.warning("generation attempt %d failed: %s", attempt, e)
+            if research:
+                content = content + [{"type": "text", "text": "The video plan failed validation: " + str(e) + ". Return a complete shorter plan and matching code."}]
     if not plan or not code:
         raise FullGenFailed(f"Sonnet returned no usable plan and code (last stop_reason: {stop})")
     plan["_assets"] = job.get("assets", [])

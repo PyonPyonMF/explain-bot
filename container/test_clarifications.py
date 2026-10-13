@@ -95,7 +95,7 @@ class ClarificationTests(unittest.TestCase):
             self.assertNotIn("Original source", response["data"]["content"])
         enqueue.assert_not_called(); self.assertEqual(self.quota(), 0)
 
-    def test_research_choice_uses_deep_text_task_and_one_quota_unit(self):
+    def test_research_choice_uses_deep_video_and_one_quota_unit(self):
         key, record = self.put(question="разбери историю https://forum.example/")
         choices = C.card(key, record)
         self.assertTrue(all(len(row["components"]) <= 5 for row in choices["components"]))
@@ -103,7 +103,7 @@ class ClarificationTests(unittest.TestCase):
         enqueue = Mock(return_value=True)
         _, response = I.handle(self.click(key, "research"), enqueue)
         job = enqueue.call_args.args[0]
-        self.assertEqual((job["response_format"], job["text_task"]), ("text", "research"))
+        self.assertEqual((job["response_format"], job["text_task"]), ("video", "research"))
         self.assertEqual(self.quota(), 1)
         self.assertEqual(response["data"]["components"], [])
 

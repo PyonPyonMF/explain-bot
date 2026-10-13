@@ -176,7 +176,11 @@ def build_user_content(job, images, texts):
                  "namesakes must not replace the question. Lead with the actual answer; do not narrate the user's act of asking, "
                  "define words from the question, or fill missing facts with generic background. If the central answer is unknown, "
                  "say what remains unknown briefly instead of making a long explanation of why the question is hard.")
-    parts += texts
+    if job.get("research_video"):
+        from deep_research import VIDEO_RULE
+        parts += ["<research_dossier>\n" + job["deep_research_report"] + "\n</research_dossier>", VIDEO_RULE]
+    else:
+        parts += texts
     if job.get("conversation_analysis"):
         from conversation import RULE
         parts.append(RULE)
@@ -436,7 +440,7 @@ def source_notices(job):
 def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
-    if job.get("followup") and (job.get("video_script") or {}).get("excerpt"):
+    if job.get("followup") and not job.get("research_video") and (job.get("video_script") or {}).get("excerpt"):
         content += "\n\n" + job["video_script"]["excerpt"]
     for notice in source_notices(job):
         content += "\n" + notice
@@ -551,7 +555,7 @@ def handle_job(job):
     from render_modes import response_format, text_task
     job.setdefault("response_format", response_format(job.get("question") or job.get("text") or ""))
     job.setdefault("text_task", text_task(job.get("question") or job.get("text") or ""))
-    if job["text_task"] != "explain":
+    if job["text_task"] in ("transcript", "summary"):
         job["response_format"] = "text"
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
@@ -560,13 +564,23 @@ def handle_job(job):
             from text_answers import deliver
             research_progress(job, "🔎 Начинаю подробное исследование источников. Это может занять до 10 минут…" if BOT_LANG == "ru" else
                        "🔎 Starting a detailed source investigation. This can take up to 10 minutes…")
-            deliver(job, investigate(job, lambda message: research_progress(job, message)))
-            return
-        from followups import prepare
-        images, texts, notes = prepare(job, collect)
-        job["prepared_inputs"] = (images, texts, notes)
-        from conversation import requested
-        job["conversation_analysis"] = requested(job, texts) and not job.get("primary_document") and not job.get("primary_x")
+            dossier = investigate(job, lambda message: research_progress(job, message))
+            if job.get("response_format") == "text":
+                deliver(job, dossier)
+                return
+            if job.get("deep_research_outcome") not in ("ready", "partial"):
+                _safe_text(job, job.get("deep_research_notice") or "Не удалось подготовить исследование для видео.")
+                return
+            job.update(research_video=True, deep_research_report=dossier, image_walkthrough=False,
+                       conversation_analysis=False, assets=[])
+            images, texts, notes = job.get("prepared_inputs") or ([], [], [])
+            job["prepared_inputs"] = (images, texts, notes)
+        else:
+            from followups import prepare
+            images, texts, notes = prepare(job, collect)
+            job["prepared_inputs"] = (images, texts, notes)
+            from conversation import requested
+            job["conversation_analysis"] = requested(job, texts) and not job.get("primary_document") and not job.get("primary_x")
         if job.get("response_format") == "text":
             from text_answers import answer, deliver
             _safe_text(job, S["p_" + job["text_task"]] if job["text_task"] in ("transcript", "summary") else S["p_text"])
@@ -577,7 +591,7 @@ def handle_job(job):
             deliver(job, answer(job))
             return
         visuals_on = os.environ.get("VISUAL_ASSETS", "1") == "1"
-        if visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1":
+        if not job.get("research_video") and (visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1"):
             _safe_text(job, S["p_visuals"])
             prepare_sources(job, images, texts, workdir, visuals_on)
             if request_missing_context(job):

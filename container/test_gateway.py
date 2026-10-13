@@ -428,19 +428,26 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         i.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
         self.submit.assert_not_called()
 
-    async def test_research_slash_and_natural_forum_study_select_text_worker(self):
+    async def test_research_slash_and_natural_forum_study_select_video_worker(self):
         i = interaction({"type": 1, "name": "research", "options": [{"name": "query", "value": "Почему закрылся сервер? https://forum.example/"},
                         {"name": "private", "value": True}]})
         await self.bot.on_interaction(i)
-        job = self.text_submit.call_args.args[1]
+        job = self.submit.call_args.args[1]
         self.assertEqual(job["text_task"], "research")
         self.assertTrue(job["private"])
-        self.submit.assert_not_called()
-        self.text_submit.reset_mock()
+        self.text_submit.assert_not_called()
+        self.submit.reset_mock()
         msg = message("<@999> какие причины закрытия сервера, изучи https://forum.ss13.ru")
         await self.bot.on_message(msg)
-        self.assertEqual(self.text_submit.call_args.args[1]["text_task"], "research")
+        self.assertEqual(self.submit.call_args.args[1]["text_task"], "research")
         self.assertIn("исследование", msg.reply.call_args.args[0])
+        self.text_submit.assert_not_called()
+
+    async def test_research_slash_explicit_text_option_selects_text_worker(self):
+        i = interaction({"type": 1, "name": "research", "options": [{"name": "query", "value": "История сервера"},
+                        {"name": "format", "value": "text"}]})
+        await self.bot.on_interaction(i)
+        self.assertEqual(self.text_submit.call_args.args[1]["text_task"], "research")
         self.submit.assert_not_called()
 
     async def test_text_directive_inside_target_post_is_not_a_format_request(self):

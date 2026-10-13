@@ -278,7 +278,8 @@ def handle(i, enqueue):
     job["response_format"] = response_format(job.get("question") or job.get("text") or "")
     job["text_task"] = text_task(job.get("question") or job.get("text") or "")
     if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "research":
-        job.update(response_format="text", text_task="research")
+        chosen = _option(i, "format")
+        job.update(response_format=chosen if chosen in ("text", "video") else job["response_format"], text_task="research")
     job["private"] = private
     user = ((i.get("member") or {}).get("user") or {}).get("id") or (i.get("user") or {}).get("id") or "unknown"
     import clarifications as C

@@ -14,7 +14,7 @@ ACTIONS = {
     "video": ("video", "explain", "2d"), "text": ("text", "explain", "2d"),
     "transcript": ("text", "transcript", "2d"), "summary": ("text", "summary", "2d"),
     "3d": ("video", "explain", "3d"),
-    "research": ("text", "research", "2d"),
+    "research": ("video", "research", "2d"),
 }
 LABELS = {
     "ru": {"video": "Объяснить видео", "text": "Объяснить текстом", "transcript": "Транскрипция",
@@ -261,6 +261,8 @@ def handle(interaction, enqueue, state):
                 return _error("limit", lang)
             job = dict(job)
             job["response_format"], job["text_task"], job["render_mode"] = ACTIONS[action]
+            if action == "research":
+                job["response_format"] = response_format(record["request"])
             job["quota_paid"] = bool(record.get("quota_credit") or pay)
             job["clarification_rounds"] = int(job.get("clarification_rounds") or 0) + 1
             if record["origin"] == "mention":

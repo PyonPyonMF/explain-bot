@@ -15,6 +15,17 @@ MAX_ROUNDS = 22
 MAX_DOCUMENT_CHARS = 180_000
 MAX_REPORT_CHARS = 26_000
 
+VIDEO_RULE = """Turn the internal research dossier into a coherent narrated investigation video. The dossier
+is evidence-backed working material, not text to paste into Discord or read verbatim. Answer the actual question,
+introduce the key actors, show a dated timeline, compare accounts, and explain supported causes and the requested
+relationships. Preserve attribution and uncertainty: an accusation or inference must not become an established
+fact in the narration or animation. Dashed/qualified links can show disputed relationships; avoid unsupported
+causal arrows. State the most important unresolved issue briefly. No invented motives or dramatic scenes.
+Use names, dates and facts only from the dossier. Do not narrate raw URLs or source IDs. Show concise source
+labels where useful; a few source links will accompany the video. Do not replace the investigation with generic
+background or the process of searching. Prefer a timeline, actor map and comparison of accounts to dense slides.
+"""
+
 SEARCH_PROMPT = """Investigate the user's question deeply using PUBLIC primary sources. This is a historical/
 community investigation, not a short explainer. Build a chronology, map the relevant public actors and their
 stated positions, examine causes and the requested relationships, and seek contrary evidence. Decompose the
@@ -314,11 +325,17 @@ def answer(job, progress=lambda text: None):
         question += "\nEarlier conversation (unverified context):\n" + json.dumps(previous, ensure_ascii=False)[:12000]
         urls += [u.rstrip(".,;:!?)»") for u in URL_RE.findall(question)]
     russian = P.BOT_LANG == "ru"
+    job["deep_research_outcome"] = "unavailable"
+    job["deep_research_notice"] = ("Не удалось собрать достаточно проверяемых данных для видео. Пришли конкретную тему или источник."
+                                   if russian else "There is not enough verified evidence for a video. Send a specific topic or source.")
     if os.environ.get("WEB_RESEARCH", "1") != "1":
+        job["deep_research_notice"] = "Исследование источников сейчас отключено." if russian else "Source research is currently disabled."
         return "Исследование источников сейчас отключено." if russian else "Source research is currently disabled."
     evidence, checkpoint, stats, deadline = investigate(question, list(dict.fromkeys(urls)), progress)
     job["deep_research_stats"] = stats
     if stats["reason"] == "refused":
+        job["deep_research_outcome"] = "refused"
+        job["deep_research_notice"] = stats.get("refusal") or ("Не могу помочь с этим запросом." if russian else "I can't help with that request.")
         return stats.get("refusal") or ("Не могу помочь с этим запросом." if russian else "I can't help with that request.")
     progress("📝 Сопоставляю версии и составляю подробный разбор со ссылками…" if russian else "📝 Comparing accounts and writing the sourced report…")
     report = {"gaps": checkpoint.get("gaps") or []}
@@ -327,7 +344,9 @@ def answer(job, progress=lambda text: None):
         try:
             result = _call([{"role": "user", "content": json.dumps(data, ensure_ascii=False)}], REPORT_PROMPT, deadline, max_tokens=10000)
             if result.get("stop_reason") == "refusal":
-                return "".join(b.get("text", "") for b in result.get("content", []) if b.get("type") == "text")[:1600]
+                job["deep_research_outcome"] = "refused"
+                job["deep_research_notice"] = "".join(b.get("text", "") for b in result.get("content", []) if b.get("type") == "text")[:1600]
+                return job["deep_research_notice"]
             if result.get("stop_reason") == "max_tokens":
                 raise ValueError("Report exceeded output budget")
             report = P.parse_json_reply("".join(b.get("text", "") for b in result.get("content", []) if b.get("type") == "text"))
@@ -336,16 +355,22 @@ def answer(job, progress=lambda text: None):
             # Useful verified navigation survives an API failure; never substitute an uncited model answer.
             source_list = "\n".join(f"• [{_plain(d['title'], 100)}]({d['url']})" for d in list(evidence.documents.values())[:12])
             report["gaps"] = ["Не удалось завершить сопоставление источников; выводы не сформированы." if russian else "Source synthesis could not be completed; no conclusions were produced."]
+            job["deep_research_notice"] = ("Источники найдены, но не удалось завершить их сопоставление для видео. Попробуй повторить запрос."
+                                           if russian else "Sources were found, but their synthesis could not be completed for the video. Please retry.")
             return render_report(report, evidence, stats, russian) + "\n\n" + source_list
     images, texts, notes = job.get("prepared_inputs") or ([], [], [])
     # Save bounded attributed evidence, not merely this report, for subsequent questions.
     rendered = render_report(report, evidence, stats, russian)
-    cited = set(re.findall(r"\[(S\d+)\]\(https?://", rendered))
+    cited_order = list(dict.fromkeys(re.findall(r"\[(S\d+)\]\(https?://", rendered)))
+    cited = set(cited_order)
+    if cited:
+        job["deep_research_outcome"] = "partial" if stats.get("partial") else "ready"
     retained = sorted(evidence.documents.values(), key=lambda d: d["id"] not in cited)
     while retained and len(json.dumps(retained, ensure_ascii=False)) > 140000:
         retained.pop()
     texts.append("<forum_research_sources>\n" + json.dumps(retained, ensure_ascii=False) + "\n</forum_research_sources>")
     job["prepared_inputs"] = (images, texts, notes)
-    job["research"] = [{"url": d["url"], "title": d["title"], "summary": ""} for d in evidence.documents.values()]
+    by_id = {d["id"]: d for d in evidence.documents.values()}
+    job["research"] = [{"url": by_id[sid]["url"], "title": by_id[sid]["title"], "summary": ""} for sid in cited_order]
     log.info("deep research complete: %s", json.dumps(stats))
     return rendered
