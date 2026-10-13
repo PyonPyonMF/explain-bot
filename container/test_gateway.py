@@ -206,9 +206,84 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def test_own_attachment_does_not_depend_on_reading_an_unavailable_reply(self):
         msg = message("<@999>", reference=discord.MessageReference(message_id=200, channel_id=789))
         msg.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "article.pdf", "content_type": "application/pdf"})]
+        msg.channel.fetch_message.side_effect = discord.NotFound(SimpleNamespace(status=404, reason="Not Found"), "gone")
         await self.bot.on_message(msg)
-        msg.channel.fetch_message.assert_not_awaited()
         self.assertEqual(self.submit.call_args.args[1]["kind"], "query")
+
+    async def test_reply_to_bot_without_explicit_mention_is_ignored(self):
+        target = message("Previous video", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("Show a concrete example", reference=ref)
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        msg.reply.assert_not_awaited()
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+
+    async def test_mentioned_reply_uses_saved_script_and_accepts_another_video(self):
+        saved = {"root_id": "200", "source": {"texts": ["Original source"], "images": []},
+                 "history": [{"question": "Explain reducers", "title": "Reducer", "narration": "State plus event produces new state."}]}
+        I.state().put_explanation("789", "200", saved)
+        target = message("Previous video", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> Show a concrete project", reference=ref)
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["followup"], saved)
+        self.assertEqual(job["text"], "Show a concrete project")
+        self.assertEqual(job["context_messages"], 0)
+        self.assertEqual(job["followup_message_id"], "200")
+        self.assertEqual(job["response_message_id"], "400")
+        self.assertIn("видео", msg.reply.call_args.args[0])
+
+    async def test_followups_keep_separate_video_branches(self):
+        for mid, subject in [(200, "Reducer"), (201, "Fork and flush")]:
+            saved = {"source": {"texts": [subject]}, "history": [{"title": subject}]}
+            I.state().put_explanation("789", str(mid), saved)
+            target = message(subject, mid=mid)
+            target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+            ref = discord.MessageReference(message_id=mid, channel_id=789)
+            ref.resolved = target
+            msg = message("<@999> Give an example", mid=mid + 100, reference=ref)
+            await self.bot.on_message(msg)
+            self.assertEqual(self.submit.call_args.args[1]["followup"]["history"][0]["title"], subject)
+
+    async def test_old_video_recovers_original_request_without_inventing_narration(self):
+        original = message("<@999> Explain https://example.com/source", mid=100)
+        parent = discord.MessageReference(message_id=100, channel_id=789)
+        parent.resolved = original
+        target = message("**Old explanation**", mid=200, reference=parent)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> Give an example", reference=ref)
+        await self.bot.on_message(msg)
+        context = self.submit.call_args.args[1]["followup"]
+        self.assertIn("https://example.com/source", context["source_job"]["text"])
+        self.assertFalse(context["history"][0]["script_available"])
+        self.assertEqual(context["history"][0]["narration"], "")
+
+    async def test_missing_old_source_does_not_render_the_bot_video_as_the_subject(self):
+        target = message("**Old explanation**", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> Explain more", reference=ref)
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.assertIn("исходную ссылку", msg.reply.call_args.args[0])
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+
+    async def test_followup_cannot_read_memory_from_another_channel(self):
+        msg = message("<@999> Explain more", reference=discord.MessageReference(message_id=200, channel_id=456))
+        with patch.object(I.state(), "get_explanation") as memory:
+            await self.bot.on_message(msg)
+        memory.assert_not_called()
+        msg.channel.fetch_message.assert_not_awaited()
+        self.submit.assert_not_called()
 
     async def test_3d_mention_keeps_reply_context(self):
         ref = discord.MessageReference(message_id=200, channel_id=789)

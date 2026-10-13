@@ -349,4 +349,6 @@ def make_video_3d(job, workdir, progress):
         # A library/cache failure must not discard an already completed video.
         log.warning("object library update skipped: %s", type(exc).__name__)
     log.info("3D video: %.1fs, %d scenes, avatar=%s", duration, len(plan["scenes"]), bool(avatar))
+    from followups import record_script
+    record_script(job, plan)
     return path, plan["title"]

@@ -22,6 +22,9 @@ MENTION_STRINGS = {
         "accepted": "🎬 Сделаю видео с объяснением. Это займёт несколько минут…",
         "context": "Объясни, что здесь обсуждают, с учётом приложенных материалов.",
         "attachment": "Объясни содержание приложенного материала.",
+        "followup": "🎬 Сделаю ещё одно видео с ответом на уточнение…",
+        "followup_question": "Объясни предыдущий ролик подробнее и проще.",
+        "followup_unavailable": "Не удалось восстановить материал предыдущего ролика. Пришли исходную ссылку или файл вместе с вопросом и упоминанием бота.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
         "failed": "⚠️ Не получилось принять запрос. Попробуй ещё раз.",
     },
@@ -29,6 +32,9 @@ MENTION_STRINGS = {
         "accepted": "🎬 I'll make an explainer video. This will take a few minutes…",
         "context": "Explain the discussion here, taking the attached material into account.",
         "attachment": "Explain the content of the attached material.",
+        "followup": "🎬 I'll make another video answering your follow-up…",
+        "followup_question": "Explain the previous video more clearly and in more detail.",
+        "followup_unavailable": "I couldn't recover the previous video's source. Send the original link or file with your question and mention the bot.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
         "failed": "⚠️ Could not accept this request. Please try again.",
     },
@@ -69,7 +75,25 @@ class QuotedMessageUnavailable(Exception):
     pass
 
 
-async def mention_job(message, bot_id):
+class FollowupUnavailable(Exception):
+    pass
+
+
+async def _referenced(message):
+    ref = message.reference
+    if not ref or ref.type != discord.MessageReferenceType.default or not ref.message_id:
+        return None
+    if ref.channel_id and ref.channel_id != message.channel.id:
+        raise QuotedMessageUnavailable()
+    if isinstance(ref.resolved, discord.Message):
+        return ref.resolved
+    try:
+        return await message.channel.fetch_message(ref.message_id)
+    except (discord.NotFound, discord.Forbidden) as exc:
+        raise QuotedMessageUnavailable() from exc
+
+
+async def mention_job(message, bot_id, depth=0):
     text = re.sub(rf"<@!?{bot_id}>", "", message.content).strip()[:I.MAX_TEXT]
     text, mode = mention_mode(text)
     own = message_payload(message)
@@ -77,22 +101,39 @@ async def mention_job(message, bot_id):
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
            "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode}
-    if own.get("attachments"):
-        return {**job, "kind": "query", "text": text or mention_strings()["attachment"], "message": own}
     target = None
     ref = message.reference
     if ref and ref.type == discord.MessageReferenceType.default and ref.message_id:
-        # Never use a bot's wider permissions to copy a different channel's history here.
-        if ref.channel_id and ref.channel_id != message.channel.id:
-            raise QuotedMessageUnavailable()
-        target = ref.resolved
-        if not isinstance(target, discord.Message):
-            try:
-                target = await message.channel.fetch_message(ref.message_id)
-            except (discord.NotFound, discord.Forbidden) as exc:
-                raise QuotedMessageUnavailable() from exc
+        try:
+            target = await _referenced(message)
+        except QuotedMessageUnavailable:
+            if not own.get("attachments"):
+                raise
     elif message.message_snapshots:
         target = message
+
+    if target is not None and str(getattr(target.author, "id", "")) == str(bot_id):
+        memory = await asyncio.to_thread(I.state().get_explanation, str(message.channel.id), str(target.id))
+        if memory is None:
+            if depth >= 3:
+                raise FollowupUnavailable()
+            try:
+                original = await _referenced(target)
+                if original is None or original.id == message.id:
+                    raise FollowupUnavailable()
+                source_job = await mention_job(original, bot_id, depth + 1)
+            except QuotedMessageUnavailable as exc:
+                raise FollowupUnavailable() from exc
+            prior = source_job.get("followup") or {}
+            history = list(prior.get("history") or []) + [{"question": source_job.get("question") or source_job.get("text") or "",
+                "title": target.content.splitlines()[0][:300] if target.content else "Earlier video",
+                "narration": "", "script_available": False}]
+            memory = {"root_id": prior.get("root_id") or str(target.id), "source_job": source_job, "history": history[-8:]}
+        return {**job, "kind": "query", "text": text or mention_strings()["followup_question"], "message": own,
+                "context_messages": 0, "followup": memory, "followup_message_id": str(target.id)}
+
+    if own.get("attachments"):
+        return {**job, "kind": "query", "text": text or mention_strings()["attachment"], "message": own}
 
     if target is not None:
         if target.message_snapshots:
@@ -223,12 +264,14 @@ class ExplainBot(discord.Client):
             if limit > 0 and not await asyncio.to_thread(I.state().take_quota, str(message.author.id), limit):
                 await reply(I._S()["limit"].format(limit))
                 return
-            status = await reply(mention_strings()["accepted"])
+            status = await reply(mention_strings()["followup" if job.get("followup") else "accepted"])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
             self.renderer.submit(self.render, job)
             submitted = True
         except QuotedMessageUnavailable:
             await reply(mention_strings()["unavailable"])
+        except FollowupUnavailable:
+            await reply(mention_strings()["followup_unavailable"])
         except Exception:
             log.exception("mention request %s failed", message.id)
             try:

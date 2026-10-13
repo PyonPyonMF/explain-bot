@@ -147,8 +147,11 @@ def _retry(fn, what, attempts=4):
 
 # ---------------------------------------------------------------- Claude
 def build_user_content(job, images, texts):
-    parts = [DOCUMENT_RULE] if job.get("primary_document") else []
-    if job.get("primary_document"):
+    import followups
+    parts = [followups.prompt(job)] if job.get("followup") else [DOCUMENT_RULE] if job.get("primary_document") else []
+    if job.get("followup"):
+        pass  # The follow-up prompt contains the current question and the earlier narration.
+    elif job.get("primary_document"):
         if job.get("question") or job.get("text"):
             parts.append(f"<question>\n{job.get('question') or job.get('text')}\n</question>")
     elif job.get("kind") == "message":
@@ -347,6 +350,8 @@ def make_video(job, workdir):
     audio = voice_all(plan, workdir)
     t2 = time.time()
     path, duration = render_all(plan, audio, workdir)
+    from followups import record_script
+    record_script(job, plan)
     log.info("video %.1fs, %d scenes: plan %.1fs, voice %.1fs, render %.1fs, %d bytes",
              duration, len(plan["scenes"]), t1 - t0, t2 - t1, time.time() - t2, os.path.getsize(path))
     return path, plan
@@ -375,6 +380,8 @@ def discord_text(job, content):
 def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
+    if job.get("followup") and (job.get("video_script") or {}).get("excerpt"):
+        content += "\n\n" + job["video_script"]["excerpt"]
     warnings = set(job.get("source_warnings") or [])
     if warnings & {"thread_unavailable", "thread_gap", "thread_limit"}:
         content += "\n⚠️ Тред прочитан частично: некоторые посты недоступны или достигнут лимит чтения." if BOT_LANG == "ru" else "\n⚠️ Only part of the thread was read: some posts are unavailable or the reading limit was reached."
@@ -383,7 +390,10 @@ def discord_video(job, path, title, debug=""):
     from assets import source_text
     sources = source_text(job)
     if sources:
-        content += "\n\n" + sources
+        for line in sources.splitlines():
+            if len(content) + len(line) + 2 > 1900:
+                break
+            content += "\n\n" + line
     payload = {"content": content[:1900], "allowed_mentions": {"parse": []},
                "attachments": [{"id": 0, "filename": "explain.mp4"}]}
     with open(path, "rb") as f:
@@ -398,6 +408,11 @@ def discord_video(job, path, title, debug=""):
     body = b"".join(parts)
     headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
     _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
+    try:
+        from followups import remember
+        remember(job)
+    except Exception as exc:
+        log.warning("could not save explanation memory: %s", type(exc).__name__)
 
 
 def prepare_sources(job, images, texts, workdir, visuals_on=True):
@@ -425,7 +440,8 @@ def prepare_sources(job, images, texts, workdir, visuals_on=True):
 def handle_job(job):
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
-        images, texts, notes = collect(job)
+        from followups import prepare
+        images, texts, notes = prepare(job, collect)
         job["prepared_inputs"] = (images, texts, notes)
         visuals_on = os.environ.get("VISUAL_ASSETS", "1") == "1"
         if visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1":

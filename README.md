@@ -16,6 +16,13 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   stickers and short videos are shown to the model as one storyboard of six numbered frames, together with the
   GIF's title and tags, so "@BigBro что он имел ввиду?" explains what the GIF shows and what it answers in the
   discussion. Pictures and GIFs from the two latest media posts of the recent discussion are included as well.
+- Reply to a bot video with `@BigBro` and a follow-up question to receive another narrated video with a short
+  text excerpt of the answer. A reply
+  without the explicit mention is ignored. Each video keeps its own source snapshot, narration and up to
+  eight turns, scoped to that Discord channel and reply branch. Public mention replies are retained in the
+  existing database for up to 30 days (the latest 100 videos, at most 2 MB per record); interaction tokens,
+  API credentials and generated animation code are not stored. For older videos without saved narration,
+  the bot tries to recover the original request and clearly marks that narration unavailable to the model.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
 - An explicitly attached PDF is the primary subject: the bot reads its text and up to four labeled page previews.

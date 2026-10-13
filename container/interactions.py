@@ -68,7 +68,10 @@ class State:
     def __init__(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
+        if os.name == "posix":
+            os.chmod(path, 0o600)  # Source snapshots and narration must not be readable by generated render code.
         self.db.execute("CREATE TABLE IF NOT EXISTS quota (user TEXT, day TEXT, n INTEGER, PRIMARY KEY (user, day))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS explanations (channel TEXT, message TEXT, created REAL, payload TEXT, PRIMARY KEY (channel, message))")
         self.db.commit()
         self.lock = threading.Lock()
         self.forms = {}
@@ -95,6 +98,23 @@ class State:
         with self.lock:
             v = self.forms.get(key)
             return v[1] if v and v[0] > time.time() else None
+
+    def put_explanation(self, channel, message, record):
+        payload = json.dumps(record, ensure_ascii=False)
+        if len(payload.encode()) > 2_000_000:
+            raise ValueError("explanation memory exceeds size limit")
+        with self.lock:
+            now = time.time()
+            self.db.execute("INSERT OR REPLACE INTO explanations VALUES (?, ?, ?, ?)", (str(channel), str(message), now, payload))
+            self.db.execute("DELETE FROM explanations WHERE created < ?", (now - 30 * 86400,))
+            self.db.execute("DELETE FROM explanations WHERE rowid IN (SELECT rowid FROM explanations ORDER BY created DESC, rowid DESC LIMIT -1 OFFSET 100)")
+            self.db.commit()
+
+    def get_explanation(self, channel, message):
+        with self.lock:
+            row = self.db.execute("SELECT payload FROM explanations WHERE channel=? AND message=? AND created>=?",
+                                  (str(channel), str(message), time.time() - 30 * 86400)).fetchone()
+            return json.loads(row[0]) if row else None
 
 
 _state = None

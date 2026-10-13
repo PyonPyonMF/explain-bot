@@ -426,5 +426,7 @@ def make_video_fullgen(job, workdir, progress):
         log.warning("last review broke the code; using the last working version")
     progress(P.S["p_render"])
     path, duration = full_render(good_code, plan, audio, workdir)
+    from followups import record_script
+    record_script(job, plan)
     log.info("full gen: %.1fs video in %.0fs total", duration, time.time() - t_start)
     return path, plan["title"]
