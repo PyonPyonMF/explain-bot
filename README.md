@@ -29,6 +29,11 @@ Videos can use actual image references instead of drawing every object with geom
   preview frames, polls and community notes; Telegram posts; Reddit posts with top comments; YouTube titles,
   descriptions and thumbnails; and for other pages the article body plus preview image. JavaScript-only pages
   are retried the way Discord's link-preview crawler sees them.
+- X thread links use FxTwitter's v2 thread reader, including links to the middle of a thread. The author's
+  posts are deduplicated and ordered, with quotes attributed separately. Up to 80 posts, 80,000 characters
+  and 12 visual inputs are read; short videos become numbered storyboards. Direct X links exclude unrelated
+  Discord history. Missing posts, read limits and unavailable media are disclosed under the resulting video;
+  a single-post fallback is never presented as a complete thread.
 - Reference pictures are searched on the web: Wikimedia Commons and Openverse (openly licensed, no key needed),
   plus optional whole-web search through Brave Search (`BRAVE_SEARCH_API_KEY`) or your own SearXNG
   (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,

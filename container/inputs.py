@@ -20,6 +20,7 @@ log = logging.getLogger("inputs")
 
 DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 MAX_IMAGES = 4
+MAX_THREAD_IMAGES = 12
 CONTEXT_MEDIA = 2        # pictures/GIFs taken from the recent discussion itself
 CONTEXT_MEDIA_WINDOW = 6  # ... from at most this many latest messages
 MAX_LINKS = 3
@@ -356,13 +357,19 @@ def collect(job):
     document_source = next((s for s in (job.get("request_message") or {}, msg)
                             if any(_is_document(a) for a in s.get("attachments") or [])), None)
     job["primary_document"] = document_source is not None
+    import links
+    direct_text = "\n".join(str(s or "") for s in (msg.get("content"), (job.get("request_message") or {}).get("content"),
+                                                   job.get("text"), job.get("question")))
+    job["primary_x"] = any(links._x_match(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
+    image_limit = MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
+    job["source_warnings"], job["thread_sources"] = [], []
 
     # 1. conversation context (needs DISCORD_BOT_TOKEN, bot in the server, Message Content intent)
     n_ctx = max(0, min(50, int(job.get("context_messages", 10 if job.get("kind") == "message" else 0) or 0)))
-    if document_source is not None:
+    if document_source is not None or job["primary_x"]:
         n_ctx = 0
     history, parents = [], []
-    if job.get("kind") == "message" and msg.get("id") and document_source is None:
+    if job.get("kind") == "message" and msg.get("id") and document_source is None and not job["primary_x"]:
         parents = _reply_chain(msg, channel_id)
         if parents:
             texts.append("<replied_to oldest_first=\"true\">\n" + "\n".join(_one_line(m, 1500) for m in parents) + "\n</replied_to>")
@@ -407,7 +414,7 @@ def collect(job):
 
     def add_image(data, ctype, info):
         """Stills go in as they are; GIFs, animated stickers and short videos become one numbered storyboard."""
-        if len(images) >= MAX_IMAGES:
+        if len(images) >= image_limit:
             return False
         ctype = (ctype or "").lower()
         board = storyboard(data, ctype) if ctype in VIDEO_TYPES or ctype.startswith("image/") else None
@@ -471,10 +478,10 @@ def collect(job):
                     add_image(preview, "image/jpeg", {"caption": f"{name}: PDF page {page}/{pdf['pages']}",
                                                        "credit": "Страница приложенного PDF"})
                 log.info("PDF input: %d pages, %d text characters, %d previews", pdf["pages"], len(pdf["text"]), len(pdf["previews"]))
-            elif ctype.startswith("image/") and len(images) < MAX_IMAGES:
+            elif ctype.startswith("image/") and len(images) < image_limit:
                 data, _ = fetch(url)
                 add_image(data, ctype, from_message)
-            elif ctype in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD and len(images) < MAX_IMAGES:
+            elif ctype in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD and len(images) < image_limit:
                 data, _ = fetch(url)
                 shown = add_image(data, ctype, {**from_message, "caption": f"Video {name} from the Discord conversation"})
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype}\">"
@@ -516,12 +523,24 @@ def collect(job):
             texts.append(f"<linked_page url=\"{u}\">[could not open: {type(e).__name__}]</linked_page>")
             continue
         n_before = len(images)
+        if page.get("thread"):
+            job["thread_sources"].append({"url": u, **page["thread"]})
+            job["source_warnings"] += page["thread"].get("warnings") or []
         if page.get("image_data"):
             add_image(page["image_data"], page.get("image_type") or "image/*", page["image_meta"])
         for ref in page.get("images") or []:
-            if len(images) >= MAX_IMAGES:
+            if len(images) >= image_limit:
+                if page.get("thread"):
+                    job["source_warnings"].append("thread_media")
                 break
-            fetch_media(ref["url"], ref.get("type") or "", {k: ref.get(k, "") for k in ("caption", "credit", "source_url")})
+            info = {k: ref.get(k, "") for k in ("caption", "credit", "source_url")}
+            shown = fetch_media(ref["url"], ref.get("type") or "", info)
+            if not shown and ref.get("fallback_url"):
+                shown = fetch_media(ref["fallback_url"], "image/jpeg", {**info, "caption": info["caption"] + " (preview frame only)"})
+                if shown:
+                    job["source_warnings"].append("thread_media")
+            if not shown and page.get("thread"):
+                job["source_warnings"].append("thread_media")
         attached = len(images) - n_before
         if attached:
             with_media.add(u)
@@ -535,13 +554,13 @@ def collect(job):
         if e.get("url") in with_media:
             continue
         for url, ctype, extra in _embed_media(e):
-            if len(images) >= MAX_IMAGES or fetch_media(url, ctype, {**from_message, **extra}):
+            if len(images) >= image_limit or fetch_media(url, ctype, {**from_message, **extra}):
                 break
 
     # 5. pictures, GIFs and stickers posted in the latest messages: "what did he mean by this?" needs to see them
     taken = 0
-    for m in ([] if document_source is not None else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
-        if taken >= CONTEXT_MEDIA or len(images) >= MAX_IMAGES:
+    for m in ([] if document_source is not None or job["primary_x"] else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
+        if taken >= CONTEXT_MEDIA or len(images) >= image_limit:
             break
         ts = (m.get("timestamp") or "")[11:16]
         posted = {"caption": f"Posted by {_author(m)}" + (f" at [{ts}]" if ts else "") + " in the conversation",
@@ -561,4 +580,10 @@ def collect(job):
     if meta:
         listing = "\n".join(f"{k}. {info.get('caption') or 'image'}" for k, info in enumerate(meta, 1))
         texts.append(f"<attached_images order=\"same as the images above\">\n{listing}\n</attached_images>")
+    if job["thread_sources"]:
+        texts.append("<thread_reading>Only the listed author posts were retrieved. Read them as one argument in their numbered order. "
+                     "Quoted posts remain separately attributed; other users' replies are not the author's own statements. "
+                     "Explain the thread's content, not the URL or unrelated chat. Do not invent missing posts or claim to have watched "
+                     "media that is not among the attached images. Reading limitations: "
+                     + (", ".join(dict.fromkeys(job["source_warnings"])) or "none detected in the returned chain") + ".</thread_reading>")
     return images, texts, notes

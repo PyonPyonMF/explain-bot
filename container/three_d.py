@@ -254,7 +254,7 @@ def make_video_3d(job, workdir, progress):
     job["avatar_credit"] = credit
     images, texts, _ = job.get("prepared_inputs") or collect(job)
     _, user_text = P.build_user_content(job, images, texts)
-    content = A.visual_content(job.get("assets", [])) + [{"type":"text", "text":user_text + "\n3D models: " + json.dumps(
+    content = (images if job.get("primary_x") else []) + A.visual_content(job.get("assets", [])) + [{"type":"text", "text":user_text + "\n3D models: " + json.dumps(
         [{"id":m["id"], "title":m.get("title",m["id"]), "description":m["description"], "parts":m.get("parts",[])[:60], "tags":m.get("tags",[])} for m in models],ensure_ascii=False)}]
     progress("🏫 Готовлю 3D-сцену и объяснение…")
     plan = code = None

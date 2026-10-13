@@ -375,6 +375,11 @@ def discord_text(job, content):
 def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
+    warnings = set(job.get("source_warnings") or [])
+    if warnings & {"thread_unavailable", "thread_gap", "thread_limit"}:
+        content += "\n⚠️ Тред прочитан частично: некоторые посты недоступны или достигнут лимит чтения." if BOT_LANG == "ru" else "\n⚠️ Only part of the thread was read: some posts are unavailable or the reading limit was reached."
+    if "thread_media" in warnings:
+        content += "\n⚠️ Не все вложения треда удалось просмотреть полностью." if BOT_LANG == "ru" else "\n⚠️ Not all thread media could be inspected in full."
     from assets import source_text
     sources = source_text(job)
     if sources:

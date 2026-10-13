@@ -19,6 +19,8 @@ DISCORDBOT_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.co
 MAX_JSON = 4 * 1024 * 1024
 MAX_ARTICLE_CHARS = 40000  # long-reads are the whole point of the link; about 10k tokens
 MAX_ARTICLE_IMAGES = 3
+MAX_THREAD_POSTS = 80
+MAX_THREAD_CHARS = 80_000
 URL_RE = re.compile(r"https?://[^\s<>()\"'`]+")
 
 
@@ -44,7 +46,7 @@ def _count(n):
 # --------------------------------------------------------------- X / Twitter
 X_HOSTS = {"x.com", "twitter.com", "fxtwitter.com", "fixupx.com", "fixvx.com", "vxtwitter.com", "twittpr.com",
            "xcancel.com", "nitter.net", "nitter.poast.org"}
-X_PATH = re.compile(r"^/(?:(?P<user>[A-Za-z0-9_]{1,15})|i(?:/web)?)/status(?:es)?/(?P<id>\d{5,25})")
+X_PATH = re.compile(r"^/(?:(?P<user>[A-Za-z0-9_]{1,15})|i(?:/web)?)/status(?:es)?/(?P<id>\d{2,20})(?:/|$)")
 
 
 def _x_match(url):
@@ -117,21 +119,25 @@ def _fx_post(t, depth=0):
     for item in (t.get("media") or {}).get("all") or []:
         kind = item.get("type") or "photo"
         url = item.get("url") if kind == "photo" else item.get("thumbnail_url")
-        media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": item.get("duration")})
+        media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": item.get("duration"),
+                      "video_url": item.get("url") if kind in ("video", "gif") and item.get("format") == "video/mp4" else None})
     poll = [(c.get("label"), c.get("percentage")) for c in (t.get("poll") or {}).get("choices") or []]
     note = t.get("community_note")
     article = t.get("article") or {}
     body, article_images, cover = _article(article) if article.get("content") else ("", [], None)
+    replying = t.get("replying_to")
     return {
         "name": author.get("name"), "handle": author.get("screen_name"), "date": t.get("created_at"),
         "text": t.get("text") or (t.get("raw_text") or {}).get("text") or "",
-        "reply_to": t.get("replying_to"), "media": media, "poll": poll, "url": t.get("url"),
+        "reply_to": replying.get("screen_name") if isinstance(replying, dict) else replying,
+        "media": media, "poll": poll, "url": t.get("url"),
         "note": note.get("text") if isinstance(note, dict) else note if isinstance(note, str) else None,
         "article": {"title": article.get("title") or "", "preview": article.get("preview_text") or "",
                     "body": body, "images": article_images, "cover": cover} if article else None,
-        "stats": {"likes": t.get("likes"), "reposts": t.get("retweets"), "replies": t.get("replies"),
+        "stats": {"likes": t.get("likes"), "reposts": t.get("reposts", t.get("retweets")), "replies": t.get("replies"),
                   "views": t.get("views")},
-        "quote": _fx_post(t["quote"], depth + 1) if depth == 0 and isinstance(t.get("quote"), dict) else None,
+        "quote": _fx_post(t["quote"], depth + 1) if depth == 0 and isinstance(t.get("quote"), dict)
+                 and t["quote"].get("type") != "tombstone" else None,
     }
 
 
@@ -176,7 +182,7 @@ def _x_text(post, label="X (Twitter) post"):
         if item["alt"]:
             bits.append(f"alt text: {item['alt']}")
         if item["type"] != "photo":
-            bits.append("only its preview frame is attached")
+            bits.append("visual frames are supplied separately when available; audio is not transcribed")
         lines.append(f"Media {k}: " + ", ".join(bits))
     if post["poll"]:
         lines.append("Poll: " + "; ".join(f"{label} — {pct}%" for label, pct in post["poll"]))
@@ -190,7 +196,7 @@ def _x_text(post, label="X (Twitter) post"):
     return "\n".join(lines)
 
 
-def _x_images(post, source_url):
+def _x_images(post, source_url, storyboards=False):
     out = []
     article, credit = post["article"], f"@{post['handle']} (X)" if post["handle"] else "X post"
     if article:  # the article's own diagrams explain more than its cover
@@ -205,10 +211,90 @@ def _x_images(post, source_url):
         credit = f"@{p['handle']} (X)" if p["handle"] else "X post"
         for item in p["media"]:
             if item["url"]:
+                if storyboards and item.get("video_url") and 0 < (item.get("duration") or 0) <= 60:
+                    out.append({"url": item["video_url"], "type": "video/mp4", "fallback_url": item["url"],
+                                "caption": f"Short video from the X post by {credit}", "credit": credit,
+                                "source_url": p["url"] or source_url})
+                    out.append({"url": item["url"], "caption": f"Full-size preview of that X video by {credit}; use this to read small diagram labels",
+                                "credit": credit, "source_url": p["url"] or source_url})
+                    continue
                 what = "Photo" if item["type"] == "photo" else "Video frame"
                 out.append({"url": item["url"], "caption": f"{what} from the linked X post by {credit}",
                             "credit": credit, "source_url": p["url"] or source_url})
     return out
+
+
+def _x_thread(url, status):
+    """FxTwitter v2 returns the author chain even when the supplied link points into its middle."""
+    data = _json(f"https://api.fxtwitter.com/2/thread/{status}")
+    focal = data.get("status")
+    if data.get("code") != 200 or not isinstance(focal, dict) or focal.get("type") == "tombstone":
+        return None
+    author = focal.get("author") or {}
+    if not author.get("screen_name"):
+        return None
+    handle = author["screen_name"].lower()
+    rows = data.get("thread")
+    warnings = [] if isinstance(rows, list) else ["thread_unavailable"]
+    rows = rows if isinstance(rows, list) else []
+    unavailable = [str(t.get("id") or "unknown") for t in rows if isinstance(t, dict) and t.get("type") == "tombstone"]
+    if unavailable or data.get("truncated"):
+        warnings.append("thread_gap")
+    posts = {}
+    for row in [*rows, focal]:
+        if not isinstance(row, dict) or row.get("type") == "tombstone":
+            continue
+        who = row.get("author") or {}
+        same = str(who.get("id")) == str(author["id"]) if author.get("id") and who.get("id") else (who.get("screen_name") or "").lower() == handle
+        mid = str(row.get("id") or "")
+        if same and re.fullmatch(r"\d{2,20}", mid):
+            posts[mid] = row
+    if status not in posts:
+        return None
+    ordered = sorted(posts, key=int)
+    for row in posts.values():
+        parent = row.get("replying_to") or {}
+        if isinstance(parent, dict) and (parent.get("screen_name") or "").lower() == handle and str(parent.get("status")) not in posts:
+            warnings.append("thread_gap")
+    chosen = ordered[:MAX_THREAD_POSTS]
+    if len(chosen) < len(ordered):
+        warnings.append("thread_limit")
+        if status not in chosen:
+            chosen[-1] = status  # The requested post must not disappear when a very long chain is capped.
+    sections, images, links, included = [], [], [], []
+    used = 0
+    for mid in chosen:
+        post = _fx_post(posts[mid])
+        post["url"] = post["url"] or f"https://x.com/{handle}/status/{mid}"
+        number = ordered.index(mid) + 1
+        section = f'<thread_post number="{number}" url="{post["url"]}" requested="{str(mid == status).lower()}">\n{_x_text(post)}\n</thread_post>'
+        remaining = MAX_THREAD_CHARS - used
+        if len(section) > remaining:
+            warnings.append("thread_limit")
+            # Retain the explicitly requested post, even if a preceding long-read filled the budget.
+            if mid == status and remaining < 2000:
+                sections, images, links, included, used = [], [], [], [], 0
+                remaining = MAX_THREAD_CHARS
+            if remaining <= 0:
+                continue
+            section = section[:remaining] + "\n[Post text cut at the reading limit.]"
+        sections.append(section)
+        used += len(section)
+        included.append(mid)
+        for image in _x_images(post, url, storyboards=True):
+            images.append({**image, "caption": f"Thread post {number}: {image['caption']}"})
+        links += URL_RE.findall(post["text"]) + (URL_RE.findall(post["quote"]["text"]) if post["quote"] else [])
+    warnings = list(dict.fromkeys(warnings))
+    coverage = f"Retrieved {len(included)} author post(s) out of {len(ordered)} available in the source response, oldest first."
+    if warnings:
+        coverage += " The thread is incomplete or could not be verified: " + ", ".join(warnings) + ". Do not invent missing parts or call this a complete thread."
+    else:
+        coverage += " This is the chain returned by the source, not a guarantee that X exposed every post."
+    if unavailable:
+        coverage += " Unavailable post IDs: " + ", ".join(unavailable[:20]) + "."
+    return {"kind": "x_thread", "text": '<x_thread author="@' + handle + '">\n' + coverage + "\n\n" + "\n\n".join(sections) + "\n</x_thread>",
+            "images": images, "links": list(dict.fromkeys(u for u in links if _host(u) not in X_HOSTS and _host(u) != "t.co")),
+            "thread": {"post_ids": included, "available_posts": len(ordered), "warnings": warnings}}
 
 
 def read_x(url):
@@ -216,6 +302,12 @@ def read_x(url):
     if not match:
         return None
     user, status = match
+    try:
+        thread = _x_thread(url, status)
+        if thread:
+            return thread
+    except Exception:
+        pass  # Keep the individual post readable when the thread service is unavailable.
     post = None
     try:
         data = _json(f"https://api.fxtwitter.com/{user}/status/{status}")
@@ -227,7 +319,8 @@ def read_x(url):
         post = _vx_post(_json(f"https://api.vxtwitter.com/{user}/status/{status}"))
     post["url"] = post["url"] or f"https://x.com/{user}/status/{status}"
     links = URL_RE.findall(post["text"]) + (URL_RE.findall(post["quote"]["text"]) if post["quote"] else [])
-    return {"kind": "x_post", "text": _x_text(post), "images": _x_images(post, url),
+    return {"kind": "x_post", "text": "[Only the linked post was retrieved; the rest of the thread is unavailable.]\n" + _x_text(post), "images": _x_images(post, url),
+            "thread": {"post_ids": [status], "warnings": ["thread_unavailable"]},
             "links": [u for u in links if _host(u) not in X_HOSTS and _host(u) != "t.co"]}
 
 
@@ -515,7 +608,7 @@ def read_link(url):
         except Exception:
             result = None
         if result:
-            limit = MAX_ARTICLE_CHARS + MAX_LINK_CHARS if "<x_article" in result["text"] else MAX_LINK_CHARS
+            limit = MAX_THREAD_CHARS + 4000 if result["kind"] == "x_thread" else MAX_ARTICLE_CHARS + MAX_LINK_CHARS if "<x_article" in result["text"] else MAX_LINK_CHARS
             result["text"] = result["text"][:limit]
             return result
     return read_generic(url)

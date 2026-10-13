@@ -369,7 +369,9 @@ def make_video_fullgen(job, workdir, progress):
     images, texts, _ = job.get("prepared_inputs") or collect(job)
     _, user_text = P.build_user_content(job, images, texts)
     from assets import visual_content
-    content = (visual_content(job["assets"]) if job.get("assets") else images) + [{"type": "text", "text": user_text}]
+    visuals = visual_content(job["assets"]) if job.get("assets") else []
+    # A renderer asset shortlist must not hide later posts' media from the thread reader.
+    content = (images + visuals if job.get("primary_x") else visuals or images) + [{"type": "text", "text": user_text}]
 
     plan, code, stop = None, None, None
     for attempt in range(2):
