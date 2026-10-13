@@ -5,6 +5,7 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -168,7 +169,11 @@ def build_user_content(job, images, texts):
         if job.get("question"):
             parts.append(f"<question>\n{job['question']}\n</question>")
     else:
-        parts.append(f"Explain this request from a Discord user.\n<request>\n{job['text']}\n</request>")
+        parts.append(f"Answer the user's CURRENT question directly. The request is an instruction to answer, not a post to describe.\n<request>\n{job['text']}\n</request>")
+    parts.append("Keep the requested subject and community. Context can disambiguate names, but unrelated chat, GIFs and famous "
+                 "namesakes must not replace the question. Lead with the actual answer; do not narrate the user's act of asking, "
+                 "define words from the question, or fill missing facts with generic background. If the central answer is unknown, "
+                 "say what remains unknown briefly instead of making a long explanation of why the question is hard.")
     parts += texts
     if any(t.startswith("<media_transcript") for t in texts):
         parts.append("Use successful media_transcript blocks for spoken content and time-labeled frames for visuals. "
@@ -177,14 +182,19 @@ def build_user_content(job, images, texts):
                      "never claim to have heard untranscribed speech. Match transcript timestamps to the frame timestamps.")
     if any(t.startswith("<linked_page") for t in texts):
         parts.append(LINK_RULE)
-    if any(m.get("animated") for m in job.get("image_meta") or []) or any(
-            marker in t for t in texts for marker in ("[GIF", "[sticker", 'kind="gif"', "Discord sticker")):
+    explicit_reaction = any(re.search(r"\b(?:gif|sticker)\b", str(m.get("caption") or ""), re.I) for m in job.get("image_meta") or [])
+    if explicit_reaction or (not job.get("primary_query") and (any(m.get("animated") for m in job.get("image_meta") or []) or any(
+            marker in t for t in texts for marker in ("[GIF", "[sticker", 'kind="gif"', "Discord sticker")))):
         parts.append(REACTION_RULE)
     if any(t.startswith("<research_reference") for t in texts):
         from research import RULE
         parts.append(RULE)
     if job.get("visual_strategy"):
         parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
+    assessment = job.get("research_assessment") or {}
+    if assessment.get("status") == "ready" and assessment.get("direct_answer"):
+        parts.append("Verified answer to the current question; center the explanation on this, not on background or alternate meanings:\n"
+                     + assessment["direct_answer"])
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
     return images, "\n\n".join(parts)
 
@@ -445,25 +455,75 @@ def discord_video(job, path, title, debug=""):
 
 
 def prepare_sources(job, images, texts, workdir, visuals_on=True):
-    """Web fact-checking and visual references run side by side; either one may fail without the other."""
-    from research import web_research
-    with cf.ThreadPoolExecutor(2) as pool:
-        found = pool.submit(web_research, job, list(images), list(texts))
-        if visuals_on:
-            try:
-                from assets import prepare_visuals
-                job["assets"], job["research"] = prepare_visuals(job, images, texts, workdir)
-            except Exception as exc:
-                log.warning("visual preparation skipped: %s", type(exc).__name__)
-        try:
-            checked = found.result()
-        except Exception as exc:
-            log.warning("web research skipped: %s", type(exc).__name__)
-            checked = []
-    checked_urls = {ref["url"] for ref in checked}
-    job["research"] = checked + [ref for ref in job.get("research", []) if ref["url"] not in checked_urls]
-    for ref in job["research"]:
+    """Resolve the actual answer before planning visuals; otherwise a guessed topic can contaminate the video."""
+    from research import web_research, needs_lookup
+    try:
+        checked = web_research(job, list(images), list(texts))
+    except Exception as exc:
+        log.warning("web research skipped: %s", type(exc).__name__)
+        checked = []
+        if needs_lookup(job):
+            job["research_assessment"] = {"status": "not_found", "direct_answer": "",
+                                          "question": "Сейчас не удалось проверить источники. Пришли конкретную тему или профиль."}
+    job["research"] = checked
+    for ref in checked:
         texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
+    blocked = (job.get("research_assessment") or {}).get("status") in ("ambiguous", "not_found", "partial", "refused")
+    extras = []
+    if visuals_on and not blocked:
+        try:
+            from assets import prepare_visuals
+            job["assets"], extras = prepare_visuals(job, images, texts, workdir)
+        except Exception as exc:
+            log.warning("visual preparation skipped: %s", type(exc).__name__)
+    checked_urls = {ref["url"] for ref in checked}
+    extras = [ref for ref in extras if ref["url"] not in checked_urls]
+    job["research"] += extras
+    for ref in extras:
+        texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
+
+
+def request_missing_context(job):
+    """Do not spend voice/render calls on a video that only explains why the actual answer is missing."""
+    assessment = job.get("research_assessment") or {}
+    if assessment.get("status") == "refused":
+        _safe_text(job, (assessment.get("direct_answer") or "Не могу помочь с этим запросом.")[:1800])
+        return True
+    if assessment.get("status") not in ("ambiguous", "not_found", "partial"):
+        return False
+    if (assessment.get("status") == "partial" and not assessment.get("question") and
+            assessment.get("direct_answer") and assessment.get("evidence_urls")):
+        # There is a useful bounded answer, but no missing user detail to ask for. Return it directly.
+        from text_answers import deliver
+        deliver(job, assessment["direct_answer"])
+        return True
+    question = assessment.get("question") or "Уточни сообщество, период или пришли ссылку на конкретную тему."
+    detail = assessment.get("direct_answer") or "Пока не хватает проверенных данных для ответа по существу."
+    detail = detail[:450]
+    urls = [u for u in assessment.get("evidence_urls", []) if isinstance(u, str) and len(u) <= 210]
+    if urls:
+        detail += "\nИсточник: <" + urls[0] + ">"
+    owner = job.get("request_user_id")
+    if owner and owner != "unknown" and int(job.get("clarification_rounds") or 0) < 2 and os.environ.get("CLARIFY_AMBIGUOUS", "1") == "1":
+        import clarifications as C
+        import interactions as I
+        key, record = C.create(I.state(), job, owner, job.get("channel_id") or job.get("response_channel_id"),
+            job.get("question") or job.get("text") or "", "evidence", origin=job.get("request_origin") or "mention",
+            prompt=question, detail=detail, credit=job.get("quota_paid", False))
+        try:
+            _, raw = _retry(lambda: _http(_discord_url(job), json.dumps(C.card(key, record)).encode(),
+                                         _discord_headers(job, "application/json"), method="PATCH"), "clarification delivery")
+            sent = json.loads(raw)
+            if sent.get("id"):
+                C.bind(I.state(), key, str(sent["id"]))
+            else:
+                C.discard(I.state(), key)
+        except Exception:
+            C.discard(I.state(), key)
+            raise
+    else:
+        _safe_text(job, (detail + "\n\n" + question)[:1800])
+    return True
 
 
 def handle_job(job):
@@ -482,12 +542,16 @@ def handle_job(job):
             _safe_text(job, S["p_" + job["text_task"]] if job["text_task"] in ("transcript", "summary") else S["p_text"])
             if job["text_task"] == "explain" and os.environ.get("WEB_RESEARCH", "1") == "1":
                 prepare_sources(job, images, texts, workdir, visuals_on=False)
+                if request_missing_context(job):
+                    return
             deliver(job, answer(job))
             return
         visuals_on = os.environ.get("VISUAL_ASSETS", "1") == "1"
         if visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1":
             _safe_text(job, S["p_visuals"])
             prepare_sources(job, images, texts, workdir, visuals_on)
+            if request_missing_context(job):
+                return
         if job.get("render_mode") == "3d":
             from three_d import make_video_3d
             path, title = make_video_3d(job, workdir, lambda msg: _safe_text(job, msg))

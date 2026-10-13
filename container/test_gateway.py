@@ -13,11 +13,13 @@ import gateway
 import interactions as I
 
 
-def interaction(data, kind=discord.InteractionType.application_command):
+def interaction(data, kind=discord.InteractionType.application_command, *, message_id=None, user_id=42):
     return SimpleNamespace(
         id=123, application_id=456, token="test-token", type=kind,
-        locale=discord.Locale.russian, channel_id=789, user=SimpleNamespace(id=42), data=data,
-        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), send_modal=AsyncMock()),
+        locale=discord.Locale.russian, channel_id=789, user=SimpleNamespace(id=user_id), data=data,
+        message=SimpleNamespace(id=message_id) if message_id else None,
+        edit_original_response=AsyncMock(),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), send_modal=AsyncMock(), edit_message=AsyncMock(), is_done=lambda: False),
     )
 
 
@@ -204,12 +206,87 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(job["channel_id"], "789")
         msg.channel.fetch_message.assert_not_awaited()
 
-    async def test_plain_mention_explains_recent_conversation(self):
+    async def test_plain_mention_offers_a_choice_before_reading_the_discussion(self):
         msg = message("<@999>")
         await self.bot.on_message(msg)
-        job = self.submit.call_args.args[1]
-        self.assertIn("обсуждают", job["text"])
-        self.assertEqual(job["context_messages"], 10)
+        self.submit.assert_not_called()
+        self.text_submit.assert_not_called()
+        self.assertIn("Что нужно сделать", msg.reply.call_args.args[0])
+        record = json.loads(I.state().db.execute("SELECT payload FROM clarifications").fetchone()[0])
+        self.assertIn("обсуждают", record["job"]["text"])
+        self.assertEqual(record["job"]["context_messages"], 10)
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+
+    async def test_ambiguous_video_request_waits_then_starts_only_after_owner_choice_ack(self):
+        target = message("Video", mid=100)
+        target.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "clip.mp4", "content_type": "video/mp4",
+                                                             "url": "https://cdn.example/clip.mp4"})]
+        ref = discord.MessageReference(message_id=100, channel_id=789); ref.resolved = target
+        msg = message("<@999> разбери это", reference=ref)
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called(); self.text_submit.assert_not_called()
+        view = msg.reply.call_args.kwargs["view"]
+        button = next(b for b in view.children if b.custom_id.endswith(":summary"))
+        click = interaction({"custom_id": button.custom_id}, discord.InteractionType.component, message_id=400)
+        self.text_submit.side_effect = lambda *args: click.response.edit_message.assert_awaited_once()
+        await self.bot.on_interaction(click)
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual((job["response_format"], job["text_task"]), ("text", "summary"))
+        self.assertEqual(job["message"]["id"], "100")
+        self.assertEqual(job["response_message_id"], "400")
+        self.assertIsNone(click.response.edit_message.call_args.kwargs["view"])
+        await self.bot.on_interaction(click)
+        self.text_submit.assert_called_once()
+
+    async def test_choice_can_be_requested_when_generation_queue_is_full(self):
+        self.bot.slots.acquire(); self.bot.slots.acquire()
+        msg = message("<@999> разбери это")
+        await self.bot.on_message(msg)
+        self.assertTrue(msg.reply.call_args.kwargs["view"].children)
+        self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+        self.submit.assert_not_called(); self.text_submit.assert_not_called()
+
+    async def test_choice_ack_failure_returns_reservation_and_quota(self):
+        msg = message("<@999> разбери это")
+        await self.bot.on_message(msg)
+        button = next(b for b in msg.reply.call_args.kwargs["view"].children if b.custom_id.endswith(":text"))
+        click = interaction({"custom_id": button.custom_id}, discord.InteractionType.component, message_id=400)
+        click.response.edit_message.side_effect = RuntimeError("ack failed")
+        with self.assertLogs("gateway", level="ERROR"):
+            await self.bot.on_interaction(click)
+        self.text_submit.assert_not_called()
+        self.assertEqual(I.state().db.execute("SELECT COALESCE(SUM(n),0) FROM quota").fetchone()[0], 0)
+        self.assertEqual(I.state().db.execute("SELECT status FROM clarifications").fetchone()[0], "pending")
+        self.assertTrue(self.bot.slots.acquire(blocking=False)); self.assertTrue(self.bot.slots.acquire(blocking=False))
+
+    async def test_choice_edit_opens_a_native_modal_and_updates_controls(self):
+        msg = message("<@999> разбери это")
+        await self.bot.on_message(msg)
+        button = next(b for b in msg.reply.call_args.kwargs["view"].children if b.custom_id.endswith(":edit"))
+        click = interaction({"custom_id": button.custom_id}, discord.InteractionType.component, message_id=400)
+        await self.bot.on_interaction(click)
+        modal = click.response.send_modal.call_args.args[0]
+        self.assertEqual(modal.to_dict()["components"][0]["components"][0]["value"], "разбери это")
+        submit = interaction({"custom_id": modal.custom_id, "components": [{"type": 1, "components": [
+            {"custom_id": "q", "value": "Объясни на примере текстом"}]}]}, discord.InteractionType.modal_submit, message_id=400)
+        await self.bot.on_interaction(submit)
+        self.assertIn("уточнён", submit.response.edit_message.call_args.kwargs["content"])
+        self.assertIsNotNone(submit.response.edit_message.call_args.kwargs["view"])
+        self.text_submit.assert_not_called(); self.submit.assert_not_called()
+        modal.stop()
+
+    async def test_failed_worker_submission_restores_choice_buttons(self):
+        msg = message("<@999> разбери это")
+        await self.bot.on_message(msg)
+        button = next(b for b in msg.reply.call_args.kwargs["view"].children if b.custom_id.endswith(":text"))
+        click = interaction({"custom_id": button.custom_id}, discord.InteractionType.component, message_id=400)
+        click.response.is_done = lambda: True
+        self.text_submit.side_effect = RuntimeError("pool unavailable")
+        with self.assertLogs("gateway", level="ERROR"):
+            await self.bot.on_interaction(click)
+        click.edit_original_response.assert_awaited_once()
+        self.assertTrue(click.edit_original_response.call_args.kwargs["view"].children)
+        self.assertEqual(I.state().db.execute("SELECT COALESCE(SUM(n),0) FROM quota").fetchone()[0], 0)
 
     async def test_bare_mention_with_pdf_explains_attachment_not_discussion(self):
         msg = message("<@999>")

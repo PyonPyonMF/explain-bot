@@ -49,7 +49,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 
 `/explain` — запрос, контекст канала, приватный ответ и выбор 2D/3D. В меню сообщения → **Приложения** доступны «Объяснить» и «Спросить про это».
 
-Обычно отвечаю видео. Слова `объясни текстом`, команды транскрипции и `summarize` включают текстовый ответ.
+Обычно отвечаю видео. `объясни текстом`, транскрипция и `summarize` включают текст. На расплывчатый запрос предложу кнопки; `выбор` открывает их вручную.
 Подробнее — выбери **раздел** у `/help` (в русском интерфейсе `/помощь`).""",
             "text": f"""**Текст, транскрипция или резюме**
 {intro}
@@ -81,6 +81,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **PDF:** читаю текст и до 4 страниц-превью. До 10 МиБ, 60 страниц и 120 000 символов. Скан без текстового слоя пока не читается.
 • **Текст и код:** можно вставить прямо в сообщение или приложить поддерживаемый текстовый файл.
 • **X:** читаю пост, цитаты, статью и цепочку постов автора; ссылка может вести в середину треда. До 80 постов и 80 000 символов; недоступные части отмечаю.
+• **Форумы:** могу искать по самому форуму, читать темы и следующие страницы. Например: `найди ответ на https://forum.ss13.ru/`. Авторы, цитаты и подписи рассматриваются отдельно; неясные детали уточняю.
 • **Telegram, Reddit и обычные сайты:** читаю доступный текст поста или страницы. Закрытые страницы и часть сайтов могут не открыться.
 • **YouTube:** название, описание и обложка — не содержимое всего ролика.
 
@@ -101,6 +102,7 @@ YouTube пока не расшифровываю. Если доступна то
 
 **`/objects` / `/объекты`** — найти объект в 3D-библиотеке.
 **`/help` / `/помощь`** — справка с выбором раздела, видна только тебе. Также можно написать мне `помощь`, `help` или `что ты умеешь`.
+**Неясный запрос:** предложу кнопки выбора действия. `выбор` вызывает их вручную. «Уточнить запрос» открывает поле для текста; «Отмена» прекращает запрос. Выбирает только автор, в течение 15 минут; лимит расходуется после выбора.
 Справка не расходует лимит запросов и работает, даже когда я занят.""",
             "3d": f"""**3D-класс и библиотека объектов**
 Упомяни меня {mention} и начни запрос с `3d`:
@@ -141,7 +143,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **3D:** `3d explain a pendulum`; `/objects` browses reusable 3D objects.
 
 `/explain` offers a query, channel context, private replies and 2D/3D mode. The message Apps menu offers Explain and Ask about this.
-Transcript and summary requests always return text. Use `/help`'s **section** option for details.""",
+Transcript and summary requests always return text. Vague requests get choice buttons; `options` opens them manually. Use `/help`'s **section** option for details.""",
             "text": f"""**Text, transcript or summary**
 {intro}
 
@@ -169,6 +171,7 @@ Attach a source and mention me {mention}, or reply to its message.
 • PDFs: text and up to four page previews; up to 10 MiB, 60 pages and 120,000 text characters. Scans need a text layer.
 • Text and code: paste them or attach a supported text file.
 • X: posts, quotes, articles and author threads, including links to the middle. Up to 80 posts and 80,000 characters; missing parts are disclosed.
+• Forums: native search where supported, topic pages and pagination; authors, quotes and current signatures remain separate. Give the forum URL and your question.
 • Telegram, Reddit and websites: accessible post/page text. Private or unsupported pages may not open.
 • YouTube: title, description and thumbnail only.
 
@@ -189,6 +192,7 @@ Reply to my result with my mention for a follow-up. Request text explicitly each
 
 **`/objects`**: browse the 3D library.
 **`/help`**: private help with a section selector. Mention me with `help` or `помощь` for a channel reply.
+Vague requests get action buttons. `options` opens them manually; Edit request opens a form, and Cancel discards the request. Only the requester can choose, within 15 minutes. Quota starts after selection.
 Help uses no request quota and remains available when rendering is busy.""",
             "3d": f"""**3D classroom and object library**
 Mention me {mention} and start with `3d`, for example `3d explain a pendulum`. Or select `mode:3d` in `/explain`.

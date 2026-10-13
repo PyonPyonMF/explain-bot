@@ -68,6 +68,7 @@ def _source(job, prepared):
         used_chars += len(text)
     return {"images": kept_images, "image_meta": kept_meta, "native_images": kept_native, "texts": kept_texts, "notes": list(notes),
             "primary_document": bool(job.get("primary_document")), "primary_x": bool(job.get("primary_x")),
+            "primary_query": bool(job.get("primary_query")),
             "source_warnings": list(dict.fromkeys(job.get("source_warnings") or [])),
             "thread_sources": job.get("thread_sources") or [],
             "truncated": used_chars > MAX_SOURCE_CHARS or len(kept_texts) < len(source_texts) or len(kept_images) < len(images)}
@@ -132,7 +133,7 @@ def prepare(job, collect):
     if meta:
         texts.append(_image_listing(meta))
     job["image_meta"] = meta
-    for key in ("primary_document", "primary_x"):
+    for key in ("primary_document", "primary_x", "primary_query"):
         job[key] = bool(source.get(key) or fresh.get(key))
     job["source_warnings"] = list(dict.fromkeys((source.get("source_warnings") or []) + (fresh.get("source_warnings") or [])))
     job["thread_sources"] = list(source.get("thread_sources") or []) + (fresh.get("thread_sources") or [])

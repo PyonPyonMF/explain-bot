@@ -35,7 +35,7 @@ class ResearchTests(unittest.TestCase):
         with patch.object(pipeline, "_http", side_effect=replies) as http:
             found = research.web_research({"kind": "query", "text": "что такое AgentRun?"}, [], [])
         first, second = (json.loads(c.args[1]) for c in http.call_args_list)
-        self.assertEqual([t["name"] for t in first["tools"]], ["web_search", "web_fetch"])
+        self.assertEqual([t["name"] for t in first["tools"]], ["web_search", "web_fetch", "forum_search", "forum_read"])
         self.assertEqual(first["tools"][0]["type"], "web_search_20260209")
         self.assertEqual(second["messages"][-1]["role"], "assistant")  # the paused turn is continued, not restarted
         self.assertEqual(first["system"], second["system"])

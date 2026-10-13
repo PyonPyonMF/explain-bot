@@ -549,6 +549,11 @@ def read_generic(url):
         return {"kind": "file", "text": f"[{url}: content type {ctype}, not read]", "images": [], "links": []}
     if ctype == "text/plain":
         return {"kind": "text", "text": data.decode("utf-8", errors="replace")[:MAX_LINK_CHARS], "images": [], "links": []}
+    if any(marker in data for marker in (b"post_block", b"ips_Posts", b"IP.Board")) and (
+            "forum" in _host(url) or "showtopic=" in url or "showuser=" in url):
+        from forum_reader import bounded, parse_page
+        page = bounded(parse_page(data, url))
+        return {"kind": page["kind"], "text": json.dumps(page, ensure_ascii=False), "images": [], "links": []}
     p, body = _parse_html(data)
     if len(body) < 300:
         # A JavaScript shell. Many sites serve the same preview Discord shows to its own crawler.

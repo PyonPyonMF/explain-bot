@@ -6,6 +6,16 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   text/transcripts/summaries, video/audio, files/links, commands/context, 3D/library and limits.
   In channel chat, mention the bot with `помощь`, `help`, `что ты умеешь` or a topic such as `помощь видео`.
   Help is immediate, calls no models, consumes no generation quota and works even when the render queue is full.
+- Vague requests such as `разбери это`, `сделай что-нибудь`, a bare mention, or conflicting choices such as
+  `текстом или видео` open an interactive choice card. `выбор` explicitly requests the card. Pick a video or text
+  explanation, 3D, and (when a media source is plausible) a transcript or summary. **Edit request** opens a modal;
+  submitting it updates the card before you choose an action. **Cancel** discards the pending request.
+  Explicit commands, concrete questions/topics and bare source links/attachments retain their existing defaults.
+  Cards start no transcription/rendering and consume no quota. Only the original requester can choose, in the
+  original channel, once. The source snapshot is retained across restarts for 15 minutes, without interaction
+  tokens. Busy queues keep the choice available; expiry asks the user to resend. `CLARIFY_AMBIGUOUS=0` disables
+  automatic cards. Detection is a conservative set of request patterns, not a guarantee that every ambiguous
+  natural-language request will be recognized; use `выбор` to request the controls explicitly.
 - `/explain query:<text> [messages:<0-50>] [private:true]`: explains a topic or a question. With `messages`, it also
   reads that many recent messages of the channel (for example: `/explain messages:20 query:кто тут прав?`).
   With `private`, only you see the video.
@@ -75,11 +85,23 @@ Videos can use actual image references instead of drawing every object with geom
   (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,
   describing each one for the scene writer.
 - Before the script is written, Sonnet checks the facts the explanation relies on with Anthropic's server-side
-  web search (`web_search` / `web_fetch` tools, same API key), in parallel with the visual preparation. Up to six
+  web search (`web_search` / `web_fetch` tools, same API key), before visual preparation. Up to six
   findings reach the script with their sources; a finding is dropped unless its URL actually came back from
   the search tools. The sources are listed under the video. `WEB_RESEARCH=0` turns this off;
   `RESEARCH_MAX_SEARCHES` caps the billed searches per video. Web search must be allowed for the organization
-  in the Anthropic Console.
+  in the Anthropic Console. Research resolves the current question before visual planning. Public forum/gaming
+  handles explicitly named in the request can be researched, while incidental chat participants, private contact
+  details and private URLs stay out of search queries.
+- For public forums such as `forum.ss13.ru`, the research agent can use the forum's own post/member search,
+  open topic pages and follow pagination. The IP.Board reader preserves each post's author, date, quotations,
+  current signature and member title separately; forum opinions and signatures are not treated as verified
+  historical facts. Each research run reads at most ten forum pages, with per-page text and byte bounds.
+  Only source domains named by the user or actually observed in public search results are eligible; access
+  restrictions and rate limits are respected. Other forum engines can use site-scoped web search; native search
+  requires a supported public form or link. An empty search never proves that information does not exist.
+  If the requested entity/cause remains unresolved, the bot gives the supported part briefly and asks for the
+  missing context with an edit/cancel card instead of rendering a video about the question itself. Clarifying
+  the same request does not charge its quota twice. Explicit questions are not replaced by unrelated recent GIFs.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.

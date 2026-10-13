@@ -105,6 +105,7 @@ async def mention_job(message, bot_id, depth=0):
     own = message_payload(message)
     own["content"] = text
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
+           "request_user_id": str(message.author.id), "request_origin": "mention",
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
            "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode,
            "response_format": response_format(text), "text_task": text_task(text)}
@@ -183,6 +184,7 @@ def payload(interaction):
         "locale": interaction.locale.value,
         "channel_id": str(interaction.channel_id) if interaction.channel_id else None,
         "user": {"id": str(interaction.user.id)}, "data": interaction.data or {},
+        "message": {"id": str(interaction.message.id)} if getattr(interaction, "message", None) is not None else None,
     }
 
 
@@ -195,12 +197,24 @@ class QuestionModal(discord.ui.Modal):
                     custom_id=field["custom_id"], label=field["label"],
                     style=discord.TextStyle(field["style"]),
                     placeholder=field.get("placeholder"), required=field.get("required", True),
+                    default=field.get("value"),
                     max_length=field.get("max_length"),
                 ))
 
     # All submissions go through on_interaction, including forms opened before a restart.
     async def on_submit(self, interaction):
         pass
+
+
+def component_view(components):
+    if not components:
+        return None
+    view = discord.ui.View(timeout=I.FORM_TTL)
+    for row, group in enumerate(components):
+        for button in group.get("components") or []:
+            view.add_item(discord.ui.Button(label=button["label"], custom_id=button["custom_id"],
+                style=discord.ButtonStyle(button.get("style", 2)), row=row, disabled=button.get("disabled", False)))
+    return view
 
 
 async def respond(interaction, response):
@@ -211,7 +225,11 @@ async def respond(interaction, response):
         await interaction.response.send_message(
             data["content"], ephemeral=bool(data.get("flags", 0) & I.EPHEMERAL),
             allowed_mentions=discord.AllowedMentions.none(),
+            **({"view": component_view(data["components"])} if data.get("components") else {}),
         )
+    elif response["type"] == I.UPDATE_MESSAGE:
+        await interaction.response.edit_message(content=data["content"], view=component_view(data.get("components")),
+                                               allowed_mentions=discord.AllowedMentions.none())
     elif response["type"] == I.MODAL:
         await interaction.response.send_modal(QuestionModal(data))
     else:
@@ -273,6 +291,30 @@ class ExplainBot(discord.Client):
             await reply(help_text(section, os.environ.get("BOT_LANG") or "ru", self.user.id))
             return
 
+        import clarifications as C
+        has_source = bool(message.reference or message.attachments or message.embeds or re.search(r"https?://", own_text))
+        why = C.reason(own_text, has_source)
+        if why:
+            key = None
+            try:
+                job = await mention_job(message, self.user.id)
+                key, record = await asyncio.to_thread(C.create, I.state(), job, str(message.author.id),
+                                                     str(message.channel.id), own_text, why)
+                data = C.card(key, record)
+                status = await message.reply(data["content"], view=component_view(data["components"]),
+                                             mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+                await asyncio.to_thread(C.bind, I.state(), key, str(status.id))
+            except QuotedMessageUnavailable:
+                await reply(mention_strings()["unavailable"])
+            except FollowupUnavailable:
+                await reply(mention_strings()["followup_unavailable"])
+            except Exception:
+                if key:
+                    await asyncio.to_thread(C.discard, I.state(), key)
+                log.exception("could not prepare clarification for %s", message.id)
+                await reply(mention_strings()["failed"])
+            return
+
         if not self.slots.acquire(blocking=False):
             await reply(I._S()["busy"])
             return
@@ -283,6 +325,7 @@ class ExplainBot(discord.Client):
             if limit > 0 and not await asyncio.to_thread(I.state().take_quota, str(message.author.id), limit):
                 await reply(I._S()["limit"].format(limit))
                 return
+            job["quota_paid"] = limit > 0
             accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
             status = await reply(mention_strings()[accepted])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
@@ -306,7 +349,8 @@ class ExplainBot(discord.Client):
                 self.slots.release()
 
     async def on_interaction(self, interaction):
-        if interaction.type not in (discord.InteractionType.application_command, discord.InteractionType.modal_submit):
+        if interaction.type not in (discord.InteractionType.application_command, discord.InteractionType.modal_submit,
+                                    discord.InteractionType.component):
             return
         reserved = []
 
@@ -342,7 +386,18 @@ class ExplainBot(discord.Client):
             # Avoid logging payloads, which contain interaction tokens and user content.
             log.exception("interaction %s failed", interaction.id)
         finally:
-            for _ in reserved:
+            for job in reserved:
+                if job.get("_clarification_id"):
+                    from clarifications import rollback, pending_card
+                    await asyncio.to_thread(rollback, I.state(), job)
+                    if getattr(interaction.response, "is_done", lambda: False)():
+                        data = await asyncio.to_thread(pending_card, I.state(), job["_clarification_id"])
+                        if data:
+                            try:
+                                await interaction.edit_original_response(content=data["content"], view=component_view(data["components"]),
+                                                                         allowed_mentions=discord.AllowedMentions.none())
+                            except Exception:
+                                log.warning("could not restore clarification controls after submission failure")
                 self.slots.release()
 
     async def close(self):

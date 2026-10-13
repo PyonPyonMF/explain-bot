@@ -18,9 +18,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 log = logging.getLogger("interactions")
 
-PING, APPLICATION_COMMAND, MODAL_SUBMIT = 1, 2, 5
+PING, APPLICATION_COMMAND, MESSAGE_COMPONENT, MODAL_SUBMIT = 1, 2, 3, 5
 CHAT_INPUT, MESSAGE_COMMAND = 1, 3
-PONG, CHANNEL_MESSAGE, DEFERRED, MODAL = 1, 4, 5, 9
+PONG, CHANNEL_MESSAGE, DEFERRED, UPDATE_MESSAGE, MODAL = 1, 4, 5, 7, 9
 EPHEMERAL = 64
 ASK_COMMAND = "Ask about this (video)"
 MAX_TEXT = 4000
@@ -72,6 +72,8 @@ class State:
             os.chmod(path, 0o600)  # Source snapshots and narration must not be readable by generated render code.
         self.db.execute("CREATE TABLE IF NOT EXISTS quota (user TEXT, day TEXT, n INTEGER, PRIMARY KEY (user, day))")
         self.db.execute("CREATE TABLE IF NOT EXISTS explanations (channel TEXT, message TEXT, created REAL, payload TEXT, PRIMARY KEY (channel, message))")
+        from clarifications import initialize
+        initialize(self.db)
         self.db.commit()
         self.lock = threading.Lock()
         self.forms = {}
@@ -149,7 +151,9 @@ def _ephemeral(text):
 
 
 def _base(i):
-    return {"application_id": str(i.get("application_id")), "token": str(i.get("token")), "locale": i.get("locale")}
+    user = ((i.get("member") or {}).get("user") or i.get("user") or {}).get("id")
+    return {"application_id": str(i.get("application_id")), "token": str(i.get("token")), "locale": i.get("locale"),
+            "request_user_id": str(user or "unknown"), "request_origin": "interaction"}
 
 
 def _channel(i):
@@ -188,12 +192,12 @@ def trim_message(m, depth=0):
     }
 
 
-def _find_value(components, cid):
+def _find_value(components, cid, limit=500):
     for c in components or []:
         if isinstance(c, dict):
             if c.get("custom_id") == cid and isinstance(c.get("value"), str):
-                return c["value"][:500]
-            v = _find_value(c.get("components"), cid) or (_find_value([c["component"]], cid) if c.get("component") else None)
+                return c["value"][:limit]
+            v = _find_value(c.get("components"), cid, limit) or (_find_value([c["component"]], cid, limit) if c.get("component") else None)
             if v is not None:
                 return v
     return None
@@ -220,6 +224,9 @@ def handle(i, enqueue):
     d = i.get("data") or {}
     if t == PING:
         return _reply({"type": PONG})
+    if t in (MESSAGE_COMPONENT, MODAL_SUBMIT) and str(d.get("custom_id") or "").startswith("clarify:"):
+        from clarifications import handle as clarify
+        return clarify(i, enqueue, state())
     if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "help":
         from bot_help import help_text
         return _reply({"type": CHANNEL_MESSAGE, "data": {
@@ -272,9 +279,16 @@ def handle(i, enqueue):
     job["text_task"] = text_task(job.get("question") or job.get("text") or "")
     job["private"] = private
     user = ((i.get("member") or {}).get("user") or {}).get("id") or (i.get("user") or {}).get("id") or "unknown"
+    import clarifications as C
+    request = job.get("question") or job.get("text") or ""
+    why = C.reason(request, C.has_material(job))
+    if why:
+        key, record = C.create(state(), job, user, _channel(i), request, why, origin="interaction")
+        return _reply({"type": CHANNEL_MESSAGE, "data": {**C.card(key, record), "flags": EPHEMERAL if private else 0}})
     limit = int(os.environ.get("DAILY_LIMIT") or 0)
     if limit > 0 and not state().take_quota(user, limit):
         return _ephemeral(S["limit"].format(limit))
+    job["quota_paid"] = limit > 0
     if not enqueue(job):
         return _ephemeral(S["busy"])
     return _reply({"type": DEFERRED, "data": {"flags": EPHEMERAL} if private else {}})

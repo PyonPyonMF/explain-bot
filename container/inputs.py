@@ -370,6 +370,12 @@ def collect(job):
     direct_text = "\n".join(str(s or "") for s in (msg.get("content"), (job.get("request_message") or {}).get("content"),
                                                    job.get("text"), job.get("question")))
     job["primary_x"] = any(links._x_match(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
+    request = str(job.get("question") or job.get("text") or "")
+    own_media = any(m.get("attachments") or m.get("embeds") for m in (msg, job.get("request_message") or {}))
+    contextual = re.search(r"\b(?:тут|здесь|это|этим|этом|он|она|они|обсуждают|this|that|here|he|she|discussion)\b", request, re.I)
+    contextual = contextual or request.lower().strip(" ?!.,") in {"why", "почему", "зачем", "what", "что", "как", "how"}
+    job["primary_query"] = bool(job.get("kind") == "query" and request.strip() and not own_media and
+                                (URL_RE.search(request) or not contextual))
     image_limit = MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
     job["source_warnings"], job["thread_sources"] = [], []
     transcripts = speech.Collector(job, texts)
@@ -610,7 +616,7 @@ def collect(job):
 
     # 5. pictures, GIFs and stickers posted in the latest messages: "what did he mean by this?" needs to see them
     taken = 0
-    for m in ([] if document_source is not None or job["primary_x"] else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
+    for m in ([] if document_source is not None or job["primary_x"] or job["primary_query"] else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
         if taken >= CONTEXT_MEDIA or len(images) >= image_limit:
             break
         ts = (m.get("timestamp") or "")[11:16]
