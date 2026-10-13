@@ -45,7 +45,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
 • **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — видео с хронологией, версиями сторон и выводами.
 • **Разбирать картинки, схемы и GIF:** прикрепи материал или ответь на сообщение с ним. Для картинок могу сделать вертикальное видео с приближениями и выносками.
-• **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, посты Telegram и Reddit. YouTube — пока только описание и обложка.
+• **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, Telegram и Reddit. YouTube — по распознанной речи; кадры только по просьбе `разбери покадрово`.
 • **Отвечать на уточнения:** ответь на мой результат с упоминанием и новым вопросом. Без упоминания я не вмешиваюсь.
 • **Показывать 3D:** `3d объясни, почему качается маятник`. `/objects` — библиотека 3D-объектов.
 
@@ -73,7 +73,8 @@ def help_text(section="overview", locale="ru", bot_id=None):
 
 Поддерживаются вложения Discord, голосовые/аудиофайлы, прямые ссылки на медиа и доступные для скачивания ролики X. Я смотрю 6 кадров из разных моментов и распознаю речь; очень быстрые события между кадрами могу пропустить.
 Лимиты: {size} МиБ на файл, первые {seconds} секунд речи, до {clips} записей за запрос. О неполной расшифровке или ошибке сообщаю.
-YouTube пока не расшифровываю. Если доступна только обложка, полноценного разбора видео не будет.
+**YouTube:** пришли ссылку с `разбери`, `summarize` или `сделай транскрипцию`. По умолчанию скачиваю только аудио и читаю речь частями по 5 минут, до 60 минут на ролик. Готовую расшифровку использую повторно.
+`разбери покадрово 00:10–00:20` дополнительно включает кадры — до 24 снимков из выбранного интервала. Без интервала беру выборку по всему ролику; события между снимками могу пропустить.
 Распознавание может ошибаться; метки говорящих не устанавливают их личности.""",
             "sources": f"""**Картинки, документы и ссылки**
 Прикрепи материал и упомяни меня {mention}; можно добавить вопрос или ответить на уже отправленный файл.
@@ -85,7 +86,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **X:** читаю пост, цитаты, статью и цепочку постов автора; ссылка может вести в середину треда. До 80 постов и 80 000 символов; недоступные части отмечаю.
 • **Форумы:** могу искать по самому форуму, читать темы и следующие страницы. Например: `найди ответ на https://forum.ss13.ru/`. Авторы, цитаты и подписи рассматриваются отдельно; неясные детали уточняю.
 • **Telegram, Reddit и обычные сайты:** читаю доступный текст поста или страницы. Закрытые страницы и часть сайтов могут не открыться.
-• **YouTube:** название, описание и обложка — не содержимое всего ролика.
+• **YouTube:** распознаю речь из аудио; кадры отдельно по команде `разбери покадрово`, можно указать диапазон времени.
 
 Для текстового объяснения добавь `объясни текстом`. Для речи и видео см. раздел «Видео и аудио».""",
             "research": f"""**Глубокое исследование форума**
@@ -135,7 +136,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **PDF:** до 10 МиБ, 60 страниц и 120 000 символов текста; до 4 страниц-превью. Сканам нужен текстовый слой.
 • **Треды X:** до 80 постов автора, 80 000 символов и 12 визуальных материалов. Недоступные части отмечаю.
 • **Контекст:** `/explain` может прочитать до 50 сообщений. Для уточнений храню ограниченную историю исходника и ответов; при потере части контекста сообщаю об этом.
-• **YouTube:** только название, описание и обложка. Закрытые ссылки и некоторые сайты не читаются.
+• **YouTube:** до 60 минут речи; кадры только по явной просьбе, до 24 снимков. Прямые эфиры и недоступные ролики не обрабатываются. Повторные вопросы используют кэш расшифровки.
 • **Очередь:** при занятости или достижении дневного лимита прошу попробовать позже. Справка и `/objects` лимит не расходуют.
 • **Точность:** распознавание речи и объяснения могут ошибаться. Ссылки на источники помогают проверить утверждения.
 
@@ -154,7 +155,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **Summaries:** `summarize this video` — key points from the speech, not the full transcript.
 • **Deep research:** `/research` or `research: question + forum URL` — a narrated video with a timeline, competing accounts and conclusions.
 • **Pictures, diagrams and GIFs:** attach a source or reply to it. Image explanations can use portrait zooms and callouts.
-• **Sources:** PDFs, text/code, web pages, X threads/articles, Telegram and Reddit posts. YouTube currently provides metadata and a thumbnail only.
+• **Sources:** PDFs, text/code, web pages, X threads/articles, Telegram and Reddit. YouTube speech is transcribed; frames require an explicit frame-by-frame request.
 • **Follow-ups:** reply to my result with my mention and your next question. No mention means no automatic reply.
 • **3D:** `3d explain a pendulum`; `/objects` browses reusable 3D objects.
 
@@ -178,7 +179,8 @@ Reply to the recording and mention me {mention}:
 
 Supports Discord video/voice/audio attachments, direct media links and downloadable X clips. I inspect six sampled frames and recognize speech; brief visual events can be missed.
 Limits: {size} MiB per file, the first {seconds} seconds of audio, up to {clips} recordings per request. Partial or failed transcription is disclosed.
-YouTube is not transcribed yet. A thumbnail is not enough to analyze a whole video. Speaker labels are anonymous and do not identify people.""",
+**YouTube:** send a link with an explanation, summary or transcription request. Audio only by default, transcribed in five-minute parts for recordings up to 60 minutes. Transcripts are reused.
+`analyze frame-by-frame 00:10–00:20` additionally samples up to 24 frames. Without a range, samples span the video; intervening events may be missed. Speaker labels are local to each audio part and do not identify people.""",
             "sources": f"""**Images, files and links**
 Attach a source and mention me {mention}, or reply to its message.
 
@@ -189,7 +191,7 @@ Attach a source and mention me {mention}, or reply to its message.
 • X: posts, quotes, articles and author threads, including links to the middle. Up to 80 posts and 80,000 characters; missing parts are disclosed.
 • Forums: native search where supported, topic pages and pagination; authors, quotes and current signatures remain separate. Give the forum URL and your question.
 • Telegram, Reddit and websites: accessible post/page text. Private or unsupported pages may not open.
-• YouTube: title, description and thumbnail only.
+• YouTube: audio transcription by default; visual samples only after an explicit frame-by-frame request, optionally with a time range.
 
 Add `explain in text` for a text explanation. See the Video/audio section for speech.""",
             "research": f"""**Deep forum research**
@@ -231,7 +233,7 @@ Text, transcript and summary instructions return text.""",
 • PDF: 10 MiB, 60 pages, 120,000 text characters and four page previews. A text layer is required.
 • X threads: 80 author posts, 80,000 characters and 12 visual inputs. Missing content is disclosed.
 • Context: `/explain` can read up to 50 recent messages. Follow-ups retain a bounded source and answer history.
-• YouTube: metadata and thumbnail only. Private and some unsupported links cannot be read.
+• YouTube: up to 60 minutes of speech; up to 24 visual samples only on request. Live streams and unavailable recordings are not processed. Transcripts are cached for follow-ups.
 • A queue and daily quota apply to generation. Help and `/objects` do not consume that quota.
 • Speech recognition and explanations can be wrong; use cited sources to check claims.
 

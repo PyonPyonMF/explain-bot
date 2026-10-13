@@ -72,8 +72,8 @@ Videos can use actual image references instead of drawing every object with geom
 - Shared links are read as content, not as URLs: X/Twitter posts and full X Articles (long-reads with their
   headings, lists, code and images; also via fixvx/fxtwitter/vxtwitter/fixupx/
   nitter links, through the FxTwitter API with vxTwitter as a fallback) including quoted posts, photos, video
-  preview frames, polls and community notes; Telegram posts; Reddit posts with top comments; YouTube titles,
-  descriptions and thumbnails; and for other pages the article body plus preview image. JavaScript-only pages
+  preview frames, polls and community notes; Telegram posts; Reddit posts with top comments; YouTube speech
+  (visual samples only on explicit request); and for other pages the article body plus preview image. JavaScript-only pages
   are retried the way Discord's link-preview crawler sees them.
 - X thread links use FxTwitter's v2 thread reader, including links to the middle of a thread. The author's
   posts are deduplicated and ordered, with quotes attributed separately. Up to 80 posts, 80,000 characters
@@ -143,9 +143,35 @@ for unrelated media picked up from recent chat. Audio is decoded locally to a si
 temporary source/audio files are removed after processing. Supported media downloads are capped at 50 MiB,
 with at most two clips transcribed per request and the first 300 seconds of each by default. Duplicate media
 within a request is transcribed once. Missing audio, failures and truncated speech are distinguished in the
-model input; failures and limits are also disclosed to the user. YouTube links still provide metadata and a
-thumbnail only. Speech recognition is separately billed by ElevenLabs. `SPEECH_RECOGNITION=0` disables it,
+model input; failures and limits are also disclosed to the user. Speech recognition is separately billed by ElevenLabs. `SPEECH_RECOGNITION=0` disables it,
 `SPEECH_MAX_SECONDS` changes the per-clip cap (up to 900), and `ELEVENLABS_STT_MODEL` selects the Scribe model.
+
+YouTube URLs use **audio first**: `yt-dlp` downloads only the audio track, local FFmpeg decodes five-minute
+16 kHz FLAC chunks, and Scribe returns timestamped speech for the full permitted recording. `summarize URL`,
+`сделай транскрипцию URL`, and `разбери URL` use this path. No video track, thumbnail or ambient chat image is
+analyzed by default. Failed downloads never fall back to guessing the contents from metadata.
+`разбери покадрово 00:10–00:20 URL` or `analyze frame-by-frame ...` separately opts into video downloading and
+up to 24 timestamped frames from that range (roughly two per second for short ranges). Without a range, the
+bounded samples span the recording. This is a sampled visual analysis, not a guarantee that every frame was
+seen. Negative instructions and quoted command text do not enable it. The default summary remains speech-only;
+an explicit visual request adds only the supplied frames to it. A follow-up can request frames of the original
+YouTube link without resending it. Ordinary explanation/research output remains video unless text is requested.
+
+`compose.gateway.yml` self-hosts `bgutil-ytdlp-pot-provider:2.0.2` as the `pot` service, reachable only on the
+Compose network at `http://pot:4416`; it publishes **no host port**. The bot image includes pinned yt-dlp,
+its EJS scripts and Deno. Browser cookies/account credentials are not imported, and the downloader subprocess
+does not receive Discord, Anthropic or ElevenLabs credentials. Direct/live/private/unavailable media limits
+are reported; PO tokens do not guarantee that YouTube accepts every request.
+
+YouTube defaults: up to 60 minutes per recording (`YOUTUBE_MAX_SECONDS`, bounded 60–7200 seconds), 96 MiB audio,
+256 MiB video, and the shared two-recording request budget. Live streams are rejected. Source files and completed
+ASR parts are cached under protected `/data/youtube`; repeated requests reuse transcripts, and interrupted ASR
+can resume completed parts on retry. Speaker labels are local to each audio chunk, not persistent identities.
+The cache defaults to 512 MiB / 24 hours (`YOUTUBE_CACHE_MB`, `YOUTUBE_CACHE_HOURS`), evicts inactive recordings
+and protects disk headroom. Source text is bounded at 120,000 characters; partial coverage is explicit.
+`YOUTUBE_MEDIA=0` disables this ingestion. This cache preserves processing work, not the in-memory job queue.
+For non-Compose installations, install `container/requirements-youtube.txt`, a supported Deno runtime and the
+self-hosted provider, then set `YOUTUBE_POT_URL` to its private URL.
 
 Claude requests cache their stable system instructions (including the scene schema and animation API)
 with a one-hour TTL, shared across jobs within the API workspace. Dynamic questions, source material and

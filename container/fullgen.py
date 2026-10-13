@@ -384,7 +384,7 @@ def make_video_fullgen(job, workdir, progress):
     from assets import visual_content
     visuals = visual_content(job["assets"]) if job.get("assets") else []
     # A renderer asset shortlist must not hide later posts' media from the thread reader.
-    content = (images + visuals if job.get("primary_x") else visuals or images) + [{"type": "text", "text": user_text}]
+    content = (images + visuals if job.get("primary_x") or job.get("primary_youtube") else visuals or images) + [{"type": "text", "text": user_text}]
 
     plan, code, stop = None, None, None
     research = bool(job.get("research_video"))

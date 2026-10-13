@@ -5,11 +5,14 @@ services:
     build: ./container
     command: ["python", "gateway.py"]
     restart: unless-stopped
+    depends_on:
+      - pot
     env_file: .env
     environment:
       DATA_DIR: /data
       CODE_VERSION: ${CODE_VERSION:-gateway}
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
+      YOUTUBE_POT_URL: http://pot:4416
     volumes:
       - ./data:/data
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
@@ -21,3 +24,16 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  pot:
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

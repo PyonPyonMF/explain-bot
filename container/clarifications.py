@@ -35,6 +35,10 @@ def reason(text, has_material=False):
     action_word = r"(?:об[ъь]?ясни(?:ть)?|расшифруй|расшифровать|пересказать|транскрипци[яю]|резюме|саммари|summary|transcript)"
     if re.search(rf"\b{action_word}\s+(?:или|or)\s+(?:(?:сделай|кратко)\s+)?{action_word}\b", words):
         return "format"
+    from youtube import video_id
+    if has_material and words in ("разбери", "разбери это", "разбери видео", "посмотри", "посмотри это") and any(
+            video_id(u.rstrip(".,;:!?)»")) for u in re.findall(r"https?://[^\s<>]+", text)):
+        return None
     if mention_mode(text)[1] == "3d" or text_task(text) != "explain" or response_format(text) == "text":
         return None
     if re.search(r"\b(?:сделай|сгенерируй|запиши)\s+(?:мне\s+)?(?:видео|ролик)\b|\bлучше\s+видео\b", words):

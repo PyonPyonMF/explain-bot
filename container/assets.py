@@ -342,7 +342,9 @@ def prepare_visuals(job, images, texts, workdir):
         assets.append({**metadata, "id": asset_id, "path": str(path)})
 
     meta = job.get("image_meta") or []
-    for k, block in enumerate(images[:4]):
+    selected = sorted(set(round(i*(len(images)-1)/3) for i in range(4))) if job.get("primary_youtube") and images else list(range(min(4,len(images))))
+    for k in selected:
+        block = images[k]
         info = meta[k] if k < len(meta) else {}
         try:
             originals = job.get("image_originals") or []
@@ -352,6 +354,11 @@ def prepare_visuals(job, images, texts, workdir):
                  **{key: v for key, v in info.items() if v}, "kind": "user"})
         except Exception as exc:
             log.warning("input image unavailable: %s", type(exc).__name__)
+    if job.get("primary_youtube"):
+        job["image_walkthrough"] = False
+        job["visual_strategy"] = ("Explain the requested source using its speech and only the timestamped video frames explicitly supplied. "
+                                  "Source frame captions give original timestamps. Do not add unrelated external pictures or invent unseen visual content.")
+        return assets, research
     try:
         plan = plan_visuals(job, images, texts)
     except Exception as exc:

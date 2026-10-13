@@ -367,25 +367,29 @@ def collect(job):
                             if any(_is_document(a) for a in s.get("attachments") or [])), None)
     job["primary_document"] = document_source is not None
     import links
+    import youtube
     direct_text = "\n".join(str(s or "") for s in (msg.get("content"), (job.get("request_message") or {}).get("content"),
                                                    job.get("text"), job.get("question")))
     job["primary_x"] = any(links._x_match(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
+    job["primary_youtube"] = document_source is None and any(youtube.video_id(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
+    job["youtube_frame_analysis"] = youtube.frames_requested(str(job.get("question") or job.get("text") or ""))
+    job["youtube_sources"], job["youtube_errors"] = [], []
     request = str(job.get("question") or job.get("text") or "")
     own_media = any(m.get("attachments") or m.get("embeds") for m in (msg, job.get("request_message") or {}))
     contextual = re.search(r"\b(?:тут|здесь|это|этим|этом|он|она|они|обсуждают|this|that|here|he|she|discussion)\b", request, re.I)
     contextual = contextual or request.lower().strip(" ?!.,") in {"why", "почему", "зачем", "what", "что", "как", "how"}
     job["primary_query"] = bool(job.get("kind") == "query" and request.strip() and not own_media and
                                 (URL_RE.search(request) or not contextual))
-    image_limit = MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
+    image_limit = youtube.MAX_FRAMES if job["primary_youtube"] and job["youtube_frame_analysis"] else MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
     job["source_warnings"], job["thread_sources"] = [], []
     transcripts = speech.Collector(job, texts)
 
     # 1. conversation context (needs DISCORD_BOT_TOKEN, bot in the server, Message Content intent)
     n_ctx = max(0, min(50, int(job.get("context_messages", 10 if job.get("kind") == "message" else 0) or 0)))
-    if document_source is not None or job["primary_x"]:
+    if document_source is not None or job["primary_x"] or job["primary_youtube"]:
         n_ctx = 0
     history, parents = [], []
-    if job.get("kind") == "message" and msg.get("id") and document_source is None and not job["primary_x"]:
+    if job.get("kind") == "message" and msg.get("id") and document_source is None and not job["primary_x"] and not job["primary_youtube"]:
         parents = _reply_chain(msg, channel_id)
         if parents:
             texts.append("<replied_to oldest_first=\"true\">\n" + "\n".join(_one_line(m, 1500) for m in parents) + "\n</replied_to>")
@@ -407,7 +411,7 @@ def collect(job):
         ctx = "\n".join(ctx_lines)[-MAX_CONTEXT_CHARS:]
         texts.append(f"<conversation_before oldest_first=\"true\">\n{ctx}\n</conversation_before>")
     from conversation import requested, graph
-    job["conversation_analysis"] = requested(job, texts) and not job["primary_document"] and not job["primary_x"]
+    job["conversation_analysis"] = requested(job, texts) and not job["primary_document"] and not job["primary_x"] and not job["primary_youtube"]
     if job["conversation_analysis"]:
         texts.append(graph(job, msg if job.get("kind") == "message" else {}, parents, list(unique.values())))
 
@@ -434,7 +438,7 @@ def collect(job):
     originals, original_bytes = [], 0
     job["image_originals"] = originals
 
-    def add_image(data, ctype, info, with_speech=True):
+    def add_image(data, ctype, info, with_speech=True, deduplicate=True):
         """Stills go in as they are; GIFs, animated stickers and short videos become one numbered storyboard."""
         nonlocal original_bytes
         ctype = (ctype or "").lower()
@@ -457,7 +461,7 @@ def collect(job):
         elif ctype in VIDEO_TYPES:
             return False
         key = _fingerprint(data)
-        if key in seen:  # the same picture via a link preview and the link's own media
+        if deduplicate and key in seen:  # the same picture via a link preview and the link's own media
             return True
         blk = image_block(data, ctype)
         if blk:
@@ -568,11 +572,57 @@ def collect(job):
     source = "\n".join(m.get("content") or "" for m in sources) + "\n" + (job.get("question") or "") + "\n" + (job.get("text") or "")
     queue = list(dict.fromkeys(u.rstrip(".,;:!?)»") for u in URL_RE.findall(source)))[:MAX_LINKS]
     opened, with_media = set(), set()
+    youtube_seen = set()
     while queue and len(opened) < MAX_LINKS + 1:  # one extra slot for a link found inside a linked post
         u = queue.pop(0)
         if u in opened:
             continue
         opened.add(u)
+        vid = youtube.video_id(u)
+        if vid:
+            with_media.add(u)  # Never fall back to a YouTube thumbnail, including when audio fails.
+            job["primary_youtube"] = True
+            if vid in youtube_seen:
+                continue
+            youtube_seen.add(vid)
+            canonical = f"https://www.youtube.com/watch?v={vid}"
+            job["youtube_sources"].append(canonical)
+            if transcripts.count >= speech.MAX_CLIPS:
+                transcripts.record({"status": "clip_limit"}, canonical)
+                transcripts.warning("speech_limit")
+                continue
+            transcripts.count += 1
+            try:
+                request_frames = job["youtube_frame_analysis"] and len(images) < image_limit
+                page = youtube.read(u, job, want_frames=request_frames)
+                result = page["transcript"]
+                transcripts.record(result, page["title"] + " — " + canonical)
+                if result.get("status") != "ok":
+                    job["youtube_errors"].append(youtube.error_message(result.get("error") or ("speech_disabled" if result.get("status") == "disabled" else result.get("status"))))
+                frames = page.get("frames") or []
+                frame_start = len(images)
+                for frame in frames[:max(0, image_limit-len(images))]:
+                    add_image(frame["data"], "image/jpeg", {"caption": f"YouTube frame at {frame['seconds']:.3f} seconds from the start of the source video",
+                              "credit": "Кадр исходного YouTube-видео", "source_url": canonical}, with_speech=False, deduplicate=False)
+                supplied_frames = len(images)-frame_start
+                if page.get("coverage") and supplied_frames:
+                    coverage = {**page["coverage"], "sample_count": supplied_frames}
+                    texts.append('<youtube_visual_samples>\n' + json.dumps(coverage, ensure_ascii=False) + '\n</youtube_visual_samples>')
+                if job["youtube_frame_analysis"] and (not request_frames or supplied_frames < len(frames)):
+                    job["youtube_errors"].append("Достигнут лимит кадров: не все запрошенные визуальные фрагменты включены в разбор.")
+                if page.get("frame_error"):
+                    job["youtube_errors"].append(youtube.error_message(page["frame_error"]))
+                    job["source_warnings"].append("youtube_frames_unavailable")
+                texts.append(f'<linked_page url="{canonical}" kind="youtube_video">\n' + html.escape(
+                    f"Title: {page['title']}\nDuration: {page['duration']:.0f} seconds. Speech is provided separately in media_transcript. "
+                    + (f"{supplied_frames} timestamped visual samples are supplied for this source. Do not claim to have viewed intervening frames."
+                       if supplied_frames else "No video frames or thumbnail were inspected. Explain only the available speech; do not infer screen content.")) + '\n</linked_page>')
+            except Exception as exc:
+                code = str(exc) if isinstance(exc, youtube.YouTubeError) else type(exc).__name__
+                log.warning("YouTube input unavailable: %s", code)
+                transcripts.record({"status": "failed"}, canonical)
+                job["youtube_errors"].append(youtube.error_message(code))
+            continue
         try:
             page = links.read_link(u)
         except Exception as e:
@@ -612,6 +662,8 @@ def collect(job):
         log.info("link %s read as %s (%d chars, %d images)", u, page.get("kind"), len(page.get("text") or ""), attached)
 
     for e in embeds:  # Discord link previews, image embeds and GIFs fill the remaining image slots
+        if job["primary_youtube"] or youtube.video_id(e.get("url") or ""):
+            continue
         if e.get("url") in with_media:
             continue
         for url, ctype, extra in _embed_media(e):
@@ -620,7 +672,7 @@ def collect(job):
 
     # 5. pictures, GIFs and stickers posted in the latest messages: "what did he mean by this?" needs to see them
     taken = 0
-    for m in ([] if document_source is not None or job["primary_x"] or job["primary_query"] else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
+    for m in ([] if document_source is not None or job["primary_x"] or job["primary_query"] or job["primary_youtube"] else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
         if taken >= CONTEXT_MEDIA or len(images) >= image_limit:
             break
         ts = (m.get("timestamp") or "")[11:16]

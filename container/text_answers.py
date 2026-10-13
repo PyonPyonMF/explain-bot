@@ -38,8 +38,8 @@ def _media_failure(records, russian):
     if records and all(r["status"] in ("no_audio", "no_speech") for r in records):
         return "В записи не удалось распознать речь." if russian else "No intelligible speech was recognized in this recording."
     return ("Не удалось получить расшифровку речи. Пришли видео или аудиофайл либо ответь на сообщение с ним. "
-            "Ссылки YouTube пока не расшифровываются." if russian else
-            "I couldn't obtain a speech transcript. Attach a video/audio file or reply to its message. YouTube links aren't transcribed yet.")
+            "Можно также прислать доступную ссылку YouTube." if russian else
+            "I couldn't obtain a speech transcript. Attach a video/audio file, reply to its message, or send an accessible YouTube URL.")
 
 
 def _transcript_answer(records, russian):
@@ -72,13 +72,22 @@ def answer(job):
         russian = P.BOT_LANG == "ru"
         if task == "transcript":
             return _transcript_answer(records, russian)
-        if not any(r["status"] == "ok" and r["text"] for r in records):
+        visual_summary = bool(job.get("youtube_frame_analysis") and images)
+        if not any(r["status"] == "ok" and r["text"] for r in records) and not visual_summary:
             return _media_failure(records, russian)
         system = SUMMARY_SYSTEM
+        if visual_summary:
+            system = system.replace("Use only the supplied transcripts.",
+                "The user explicitly requested visual analysis: use the supplied transcripts AND timestamped video frames. "
+                "Describe only visible events, keep spoken claims separate, cite source timestamps and acknowledge gaps between samples. "
+                "Do not identify people from their faces.")
         context = "User's request: " + str(job.get("question") or job.get("text") or "summarize") + "\n"
         context += "Discord locale: " + str(job.get("locale") or P.BOT_LANG) + "\n"
         context += "<media_sources>\n" + json.dumps(records, ensure_ascii=False) + "\n</media_sources>"
-        images = []  # Summarize the recognized speech, not unrelated thumbnails or ambient chat pictures.
+        if visual_summary:
+            context += "\n" + "\n".join(t for t in texts if t.startswith(("<youtube_visual_samples", "<attached_images")))
+        else:
+            images = []  # Speech-only is the default; no thumbnails or ambient chat pictures.
     else:
         _, context = P.build_user_content({**job, "response_format": "text"}, images, texts)
     headers = {"x-api-key": os.environ["ANTHROPIC_API_KEY"], "anthropic-version": "2023-06-01", "content-type": "application/json"}
