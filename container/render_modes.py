@@ -15,9 +15,13 @@ def response_format(text):
     """Read explicit format instructions in the caller's words, not in quoted posts or code."""
     text = re.sub(r"```[\s\S]*?```|`[^`\n]*`|«[^»]*»|“[^”]*”|\"[^\"\n]*\"|(?<!\w)'[^'\n]*'(?!\w)", " ", text)
     text = re.sub(r"(?m)^\s*>.*$", " ", text).lower().replace("ё", "е")
+    text = re.sub(r"https?://\S+", " ", text)  # punctuation inside source URLs is not a sentence boundary
     verb = r"(?:об[ъь]?ясни(?:ть|те)?|об[ъь]?ясняй(?:те)?|поясни(?:ть|те)?|ответь(?:те)?|ответить|расскажи(?:те)?|напиши(?:те)?)"
     fillers = r"(?:пожалуйста|мне|это|только|просто|коротко|подробнее|все|этот\s+(?:тред|пост|код|пример)|эту\s+статью)"
+    text_format = r"(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)"
     patterns = [
+        # The question can sit between the instruction and its format: "объясни что тут говорят текстом".
+        ("text", rf"\b{verb}\b[^.!?;\n]{{0,600}}?\b(?P<requested_format>{text_format})\b(?=\s*(?:$|[,.!?;:\n]))"),
         ("text", rf"\b{verb}(?:[\s,]+{fillers})*[\s,]+(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)\b"),
         ("text", rf"\bтекстом[\s,]+{verb}\b"),
         ("text", r"(?:^|(?<=[,;:!?.\n]))\s*(?:только\s+)?текстом(?:\s+пожалуйста)?\s*(?=[.!?,;:]|$)"),
@@ -34,5 +38,13 @@ def response_format(text):
             before = text[max(0, match.start() - 40):match.start()]
             if re.search(r"\b(?:не|не надо|не нужно|не хочу|не нужен|do not|don't)\s*$", before):
                 continue
-            requests.append((match.start(), mode))
+            position = match.start()
+            if match.groupdict().get("requested_format"):
+                position = match.start("requested_format")
+                prefix = text[max(0, position - 60):position]
+                # Distinguish the format from a topic such as "работать с этим текстом" or "называют текстом".
+                if re.search(r"\b(?:не|с|со|над|под|за|перед|между|называют|называется|называть|считают|считается)"
+                             r"(?:\s+[\w-]+(?:ым|им))?\s*$", prefix):
+                    continue
+            requests.append((position, mode))
     return max(requests)[1] if requests else "video"

@@ -34,6 +34,21 @@ def message(content="<@999> explain this", mid=300, reference=None):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_format_after_video_question_uses_text_worker(self):
+        target = message("Video", mid=100)
+        target.attachments = [SimpleNamespace(to_dict=lambda: {"id": "1", "filename": "clip.mp4",
+            "url": "https://cdn.example/clip.mp4", "content_type": "video/mp4", "size": 100})]
+        ref = discord.MessageReference(message_id=100, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> объясни что тут говорят текстом", reference=ref)
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.text_submit.assert_called_once()
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual(job["response_format"], "text")
+        self.assertEqual(job["message"]["attachments"][0]["filename"], "clip.mp4")
+        self.assertEqual(msg.reply.call_args.args[0], gateway.mention_strings()["text"])
+
     async def asyncSetUp(self):
         self.env = patch.dict(os.environ, {"DAILY_LIMIT": "5", "BOT_LANG": "ru", "MAX_QUEUED_JOBS": "1"})
         self.env.start()

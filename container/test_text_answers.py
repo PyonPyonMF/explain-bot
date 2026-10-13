@@ -14,6 +14,24 @@ import text_answers as T
 
 
 class FormatTests(unittest.TestCase):
+    def test_format_can_follow_the_question_in_natural_word_order(self):
+        for text in ["объясни что тут говорят текстом", "обьясни что тут говорят текстом",
+                     "Объясни, что происходит в этом ролике, текстом.", "Расскажи почему он так ответил текстом",
+                     "Поясни как работает эта штука в текстовом виде", "Объясни https://x.com/example/status/1 текстом",
+                     "Объясни словами и примерами, что здесь случилось, текстом, пожалуйста",
+                     "Сделай видео. Нет, объясни что тут говорят текстом"]:
+            with self.subTest(text=text):
+                self.assertEqual(response_format(text), "text")
+
+    def test_free_word_order_keeps_negation_topics_quotes_and_later_overrides(self):
+        for text in ["Не объясняй что тут говорят текстом", "Объясни что тут говорят, только не текстом",
+                     "Объясни как работать с текстом", "Объясни как работать с большим текстом",
+                     "Объясни что называют текстом", "Объясни разницу между текстом и видео",
+                     'Что значит "объясни что тут говорят текстом"?',
+                     "Объясни что тут говорят текстом, а лучше видео"]:
+            with self.subTest(text=text):
+                self.assertEqual(response_format(text), "video")
+
     def test_explicit_requests_and_common_spelling_variants(self):
         for text in ["Объясни текстом, что такое редьюсер", "обьясни текстом", "обясни текстом", "объяснить текстом",
                      "Ответь текстом", "Объясни мне этот тред текстом", "Объясни, пожалуйста, текстом", "Текстом объясни почему",
