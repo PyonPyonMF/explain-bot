@@ -194,6 +194,22 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("обсуждают", job["text"])
         self.assertEqual(job["context_messages"], 10)
 
+    async def test_bare_mention_with_pdf_explains_attachment_not_discussion(self):
+        msg = message("<@999>")
+        msg.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "article.pdf", "content_type": "application/pdf",
+                                                          "url": "https://example.com/article.pdf"})]
+        await self.bot.on_message(msg)
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["text"], gateway.mention_strings()["attachment"])
+        self.assertEqual(job["message"]["attachments"][0]["filename"], "article.pdf")
+
+    async def test_own_attachment_does_not_depend_on_reading_an_unavailable_reply(self):
+        msg = message("<@999>", reference=discord.MessageReference(message_id=200, channel_id=789))
+        msg.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "article.pdf", "content_type": "application/pdf"})]
+        await self.bot.on_message(msg)
+        msg.channel.fetch_message.assert_not_awaited()
+        self.assertEqual(self.submit.call_args.args[1]["kind"], "query")
+
     async def test_3d_mention_keeps_reply_context(self):
         ref = discord.MessageReference(message_id=200, channel_id=789)
         ref.resolved = message("A pendulum", mid=200)

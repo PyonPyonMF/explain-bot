@@ -4,6 +4,7 @@ text attachments, and (if a bot token is set) the conversation around it.
 All of this is untrusted data. It goes into the prompt inside clearly marked tags.
 """
 import base64
+import html
 import io
 import ipaddress
 import json
@@ -331,16 +332,37 @@ def _embed_media(e):
 
 
 # --------------------------------------------------------------- build
+class AttachmentUnavailable(Exception):
+    def __init__(self, name, reason):
+        self.name = str(name or "file")[:120]
+        self.reason = reason
+        super().__init__(reason)
+
+
+def _is_document(attachment):
+    ctype = (attachment.get("content_type") or "").lower()
+    name = (attachment.get("filename") or "").lower()
+    return not (ctype.startswith(("image/", "video/")) or name.endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif", ".apng", ".mp4", ".webm", ".mov")))
+
+
 def collect(job):
     """Return (content_blocks, notes). content_blocks go into the user message; images come first."""
     images, texts, notes = [], [], []
     msg = job.get("message") or {}
     channel_id = job.get("channel_id")
+    # A document attached to this request takes precedence over a quoted post and ambient chat.
+    # If it is unreadable, fail before research/rendering rather than inventing a replacement topic.
+    document_source = next((s for s in (job.get("request_message") or {}, msg)
+                            if any(_is_document(a) for a in s.get("attachments") or [])), None)
+    job["primary_document"] = document_source is not None
 
     # 1. conversation context (needs DISCORD_BOT_TOKEN, bot in the server, Message Content intent)
     n_ctx = max(0, min(50, int(job.get("context_messages", 10 if job.get("kind") == "message" else 0) or 0)))
+    if document_source is not None:
+        n_ctx = 0
     history, parents = [], []
-    if job.get("kind") == "message" and msg.get("id"):
+    if job.get("kind") == "message" and msg.get("id") and document_source is None:
         parents = _reply_chain(msg, channel_id)
         if parents:
             texts.append("<replied_to oldest_first=\"true\">\n" + "\n".join(_one_line(m, 1500) for m in parents) + "\n</replied_to>")
@@ -363,7 +385,7 @@ def collect(job):
         texts.append(f"<conversation_before oldest_first=\"true\">\n{ctx}\n</conversation_before>")
 
     # 2. the target message itself
-    if job.get("kind") == "message":
+    if job.get("kind") == "message" and (document_source is None or document_source is msg):
         body = _gif_text((msg.get("content") or "").strip(), keep_url=True)
         emb = []
         for e in msg.get("embeds") or []:
@@ -417,16 +439,39 @@ def collect(job):
 
     from_message = {"caption": "Reference supplied in the Discord conversation", "credit": "Референс из сообщения"}
     sources = [msg, job.get("request_message") or {}, *reversed(parents)]
+    if document_source is not None:
+        sources = [document_source]
     attachments = [a for source in sources for a in source.get("attachments") or []][:10]
     embeds = [e for source in sources for e in source.get("embeds") or []][:5]
+    document_chars = 0
     for a in attachments:
         ctype = (a.get("content_type") or "").lower()
         name = a.get("filename") or "file"
         url = a.get("url") or a.get("proxy_url")
         if not url:
+            if document_source is not None and _is_document(a):
+                raise AttachmentUnavailable(name, "download")
             continue
         try:
-            if ctype.startswith("image/") and len(images) < MAX_IMAGES:
+            if ctype == "application/pdf" or name.lower().endswith(".pdf"):
+                from pdf_inputs import MAX_CHARS, PDFUnreadable, read_pdf
+                if (a.get("size") or 0) > MAX_DOWNLOAD:
+                    raise AttachmentUnavailable(name, "too_large")
+                data, _ = fetch(url)
+                try:
+                    pdf = read_pdf(data)
+                except PDFUnreadable as exc:
+                    raise AttachmentUnavailable(name, exc.reason) from exc
+                document_chars += len(pdf["text"])
+                if document_chars > MAX_CHARS:
+                    raise AttachmentUnavailable(name, "pdf_limit")
+                texts.append(f'<attachment name="{html.escape(name, quote=True)}" type="application/pdf" '
+                             f'pages="{pdf["pages"]}">\n{pdf["text"]}\n</attachment>')
+                for page, preview in pdf["previews"]:
+                    add_image(preview, "image/jpeg", {"caption": f"{name}: PDF page {page}/{pdf['pages']}",
+                                                       "credit": "Страница приложенного PDF"})
+                log.info("PDF input: %d pages, %d text characters, %d previews", pdf["pages"], len(pdf["text"]), len(pdf["previews"]))
+            elif ctype.startswith("image/") and len(images) < MAX_IMAGES:
                 data, _ = fetch(url)
                 add_image(data, ctype, from_message)
             elif ctype in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD and len(images) < MAX_IMAGES:
@@ -436,11 +481,19 @@ def collect(job):
                              f"{'[video: frames are attached as a storyboard image; the sound is not available]' if shown else '[not read]'}</attachment>")
             elif name.lower().endswith(TEXT_EXT) and (a.get("size") or 0) < 500_000:
                 data, _ = fetch(url, max_bytes=500_000)
+                if document_source is not None and not data.strip():
+                    raise AttachmentUnavailable(name, "empty")
                 texts.append(f"<attachment name=\"{name}\">\n{data.decode('utf-8', 'replace')[:MAX_FILE_CHARS]}\n</attachment>")
             else:
+                if document_source is not None and _is_document(a):
+                    raise AttachmentUnavailable(name, "unsupported")
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype or '?'}\">[not read]</attachment>")
+        except AttachmentUnavailable:
+            raise
         except Exception as e:
-            log.warning("attachment %s skipped: %s", name, e)
+            log.warning("attachment read failed: %s", type(e).__name__)
+            if document_source is not None and _is_document(a):
+                raise AttachmentUnavailable(name, "download") from e
     for source in sources:
         for url, ctype, extra in _stickers(source):
             fetch_media(url, ctype, {**from_message, **extra})
@@ -487,7 +540,7 @@ def collect(job):
 
     # 5. pictures, GIFs and stickers posted in the latest messages: "what did he mean by this?" needs to see them
     taken = 0
-    for m in list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]:
+    for m in ([] if document_source is not None else list(unique.values())[::-1][:CONTEXT_MEDIA_WINDOW]):
         if taken >= CONTEXT_MEDIA or len(images) >= MAX_IMAGES:
             break
         ts = (m.get("timestamp") or "")[11:16]

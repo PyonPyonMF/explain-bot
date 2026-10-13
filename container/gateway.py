@@ -21,12 +21,14 @@ MENTION_STRINGS = {
     "ru": {
         "accepted": "🎬 Сделаю видео с объяснением. Это займёт несколько минут…",
         "context": "Объясни, что здесь обсуждают, с учётом приложенных материалов.",
+        "attachment": "Объясни содержание приложенного материала.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
         "failed": "⚠️ Не получилось принять запрос. Попробуй ещё раз.",
     },
     "en": {
         "accepted": "🎬 I'll make an explainer video. This will take a few minutes…",
         "context": "Explain the discussion here, taking the attached material into account.",
+        "attachment": "Explain the content of the attached material.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
         "failed": "⚠️ Could not accept this request. Please try again.",
     },
@@ -75,6 +77,8 @@ async def mention_job(message, bot_id):
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
            "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode}
+    if own.get("attachments"):
+        return {**job, "kind": "query", "text": text or mention_strings()["attachment"], "message": own}
     target = None
     ref = message.reference
     if ref and ref.type == discord.MessageReferenceType.default and ref.message_id:

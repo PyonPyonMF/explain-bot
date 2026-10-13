@@ -18,6 +18,10 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   discussion. Pictures and GIFs from the two latest media posts of the recent discussion are included as well.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
+- An explicitly attached PDF is the primary subject: the bot reads its text and up to four labeled page previews.
+  Limits are 10 MiB, 60 pages and 120,000 extracted characters. Unrelated chat text and images are excluded for
+  document requests. A bare mention with an attachment explains the attachment. If the file cannot be read
+  (including a scan without a text layer), the bot replies with the reason and does not generate a video.
 - Discord attachments are made available to the renderer as image assets.
 - Shared links are read as content, not as URLs: X/Twitter posts and full X Articles (long-reads with their
   headings, lists, code and images; also via fixvx/fxtwitter/vxtwitter/fixupx/

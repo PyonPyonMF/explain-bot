@@ -4,6 +4,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core blender xvfb xauth libgl1-mesa-dri \
  && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends poppler-utils \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -18,7 +22,7 @@ RUN python -c "import matplotlib.pyplot as plt; plt.figure(); plt.text(0, 0, 'т
 RUN useradd --create-home --uid 10001 sandbox \
  && su sandbox -s /bin/sh -c "MPLCONFIGDIR=/home/sandbox/.mpl python -c \"import matplotlib.pyplot as plt; plt.figure(); plt.text(0, 0, 'тест'); plt.savefig('/tmp/s.png')\""
 
-COPY plan.py scenes.py pipeline.py inputs.py links.py assets.py research.py server.py kit.py gen_harness.py fullgen.py interactions.py gateway.py render_modes.py three_d.py three_d_kit.py three_d_runtime.py three_d_library_export.py object_library.py remote_render.py commands.json ./
+COPY plan.py scenes.py pipeline.py inputs.py pdf_inputs.py links.py assets.py research.py server.py kit.py gen_harness.py fullgen.py interactions.py gateway.py render_modes.py three_d.py three_d_kit.py three_d_runtime.py three_d_library_export.py object_library.py remote_render.py commands.json ./
 RUN chmod -R a+rX /app
 
 EXPOSE 8080
