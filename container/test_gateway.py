@@ -247,6 +247,41 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("текстом", msg.reply.call_args.args[0])
         self.assertNotIn("видео", msg.reply.call_args.args[0])
 
+    async def test_transcript_command_keeps_the_video_and_selects_text_worker(self):
+        msg = message("<@999> Сделай транскрипцию видео текстом")
+        msg.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "clip.mp4", "content_type": "video/mp4",
+                                                           "url": "https://cdn.example/clip.mp4"})]
+        await self.bot.on_message(msg)
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual((job["response_format"], job["text_task"]), ("text", "transcript"))
+        self.assertEqual(job["message"]["attachments"][0]["filename"], "clip.mp4")
+        self.assertEqual(msg.reply.call_args.args[0], gateway.mention_strings()["transcript"])
+        self.submit.assert_not_called()
+
+    async def test_summary_command_reuses_the_existing_video_source(self):
+        saved = {"source": {"texts": ["Root transcript"]}, "history": [{"narration": "Earlier explanation"}]}
+        I.state().put_explanation("789", "200", saved)
+        target = message("Video reply", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        msg = message("<@999> summarize видео", reference=ref)
+        await self.bot.on_message(msg)
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual((job["response_format"], job["text_task"]), ("text", "summary"))
+        self.assertEqual(job["followup"], saved)
+        self.assertEqual(msg.reply.call_args.args[0], gateway.mention_strings()["summary"])
+        self.submit.assert_not_called()
+
+    async def test_summary_slash_query_is_a_private_text_task(self):
+        i = interaction({"type": 1, "name": "explain", "options": [
+            {"name": "query", "value": "summarize видео"}, {"name": "private", "value": True}]})
+        await self.bot.on_interaction(i)
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual((job["response_format"], job["text_task"]), ("text", "summary"))
+        self.assertTrue(job["private"])
+        self.submit.assert_not_called()
+
     async def test_text_request_still_requires_a_mention(self):
         msg = message("Объясни текстом, что такое редьюсер")
         await self.bot.on_message(msg)

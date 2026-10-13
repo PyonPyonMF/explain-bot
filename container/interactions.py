@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
-from render_modes import mention_mode, selected_mode, response_format
+from render_modes import mention_mode, selected_mode, response_format, text_task
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -264,6 +264,7 @@ def handle(i, enqueue):
         return 400, {"error": "unsupported interaction"}
 
     job["response_format"] = response_format(job.get("question") or job.get("text") or "")
+    job["text_task"] = text_task(job.get("question") or job.get("text") or "")
     job["private"] = private
     user = ((i.get("member") or {}).get("user") or {}).get("id") or (i.get("user") or {}).get("id") or "unknown"
     limit = int(os.environ.get("DAILY_LIMIT") or 0)

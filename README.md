@@ -29,6 +29,14 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   off the answer. Replies to any part retain the same context. Each new request selects its own format:
   without an explicit text request, the bot makes a video again. Text requests have a separate worker so
   they do not wait for an active video render, while sharing the total queue and daily request limit.
+- Reply to a video/audio message with the bot mention and `Сделай транскрипцию видео текстом` (also
+  `расшифруй видео`, `transcribe video`) to receive the recognized speech with timestamps and anonymous
+  speaker labels. The bot returns the transcript directly without an LLM rewriting or shortening it.
+- `summarize видео` (also `сделай резюме видео`, `суммаризируй видео`) transcribes the speech internally and
+  returns a short text summary: the main point and key takeaways. The transcript is not included in this reply.
+  Both commands always select text output and skip video generation and web research. They work with a new
+  media attachment or a follow-up using the retained source transcript. Missing speech is reported instead of
+  substituting a summary of the thumbnail or surrounding chat. The existing speech size/duration limits apply.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
 - When explaining an existing screenshot, diagram, chart or photo, the bot uses a dedicated 720×1280 (9:16)

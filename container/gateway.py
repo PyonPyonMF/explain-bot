@@ -13,7 +13,7 @@ import urllib.request
 import discord
 
 import interactions as I
-from render_modes import mention_mode, response_format
+from render_modes import mention_mode, response_format, text_task
 
 log = logging.getLogger("gateway")
 
@@ -24,6 +24,8 @@ MENTION_STRINGS = {
         "attachment": "Объясни содержание приложенного материала.",
         "followup": "🎬 Сделаю ещё одно видео с ответом на уточнение…",
         "text": "💬 Отвечу текстом…",
+        "transcript": "📝 Сделаю текстовую расшифровку речи…",
+        "summary": "📝 Расшифрую речь и подготовлю краткое резюме…",
         "followup_question": "Объясни предыдущий ответ подробнее и проще.",
         "followup_unavailable": "Не удалось восстановить материал предыдущего ролика. Пришли исходную ссылку или файл вместе с вопросом и упоминанием бота.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
@@ -35,6 +37,8 @@ MENTION_STRINGS = {
         "attachment": "Explain the content of the attached material.",
         "followup": "🎬 I'll make another video answering your follow-up…",
         "text": "💬 I'll answer in text…",
+        "transcript": "📝 I'll transcribe the speech into text…",
+        "summary": "📝 I'll transcribe the speech and prepare a short summary…",
         "followup_question": "Explain the previous answer more clearly and in more detail.",
         "followup_unavailable": "I couldn't recover the previous video's source. Send the original link or file with your question and mention the bot.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
@@ -103,7 +107,7 @@ async def mention_job(message, bot_id, depth=0):
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
            "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode,
-           "response_format": response_format(text)}
+           "response_format": response_format(text), "text_task": text_task(text)}
     target = None
     ref = message.reference
     if ref and ref.type == discord.MessageReferenceType.default and ref.message_id:
@@ -272,7 +276,7 @@ class ExplainBot(discord.Client):
             if limit > 0 and not await asyncio.to_thread(I.state().take_quota, str(message.author.id), limit):
                 await reply(I._S()["limit"].format(limit))
                 return
-            accepted = "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
+            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
             status = await reply(mention_strings()[accepted])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
             self.submit(job)

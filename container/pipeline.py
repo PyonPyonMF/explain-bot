@@ -33,6 +33,8 @@ STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
            "text_failed": "⚠️ Не получилось подготовить ответ текстом. Попробуй ещё раз или уточни вопрос.",
            "p_text": "💬 Читаю материал и готовлю ответ текстом…",
+           "p_transcript": "📝 Готовлю текстовую расшифровку речи…",
+           "p_summary": "📝 Готовлю краткое резюме записи…",
            "p_visuals": "🖼️ Проверяю факты, подбираю референсы и иллюстрации…",
            "refused": "⚠️ Не буду это объяснять: {}", "bad_plan": "⚠️ Модель вернула неправильный план видео. Попробуй ещё раз.",
            "too_big": "⚠️ Видео получилось слишком большим для Discord.",
@@ -41,6 +43,8 @@ STRINGS = {
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
            "text_failed": "⚠️ Could not prepare the text answer. Try again or narrow the question.",
            "p_text": "💬 Reading the material and preparing a text answer…",
+           "p_transcript": "📝 Preparing the speech transcript…",
+           "p_summary": "📝 Preparing a short summary of the recording…",
            "p_visuals": "🖼️ Checking facts, finding references and illustrations…",
            "refused": "⚠️ I will not explain this: {}", "bad_plan": "⚠️ The model returned an invalid video plan. Try again.",
            "too_big": "⚠️ The video is too large for Discord.",
@@ -463,8 +467,11 @@ def prepare_sources(job, images, texts, workdir, visuals_on=True):
 
 
 def handle_job(job):
-    from render_modes import response_format
+    from render_modes import response_format, text_task
     job.setdefault("response_format", response_format(job.get("question") or job.get("text") or ""))
+    job.setdefault("text_task", text_task(job.get("question") or job.get("text") or ""))
+    if job["text_task"] != "explain":
+        job["response_format"] = "text"
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
         from followups import prepare
@@ -472,8 +479,8 @@ def handle_job(job):
         job["prepared_inputs"] = (images, texts, notes)
         if job.get("response_format") == "text":
             from text_answers import answer, deliver
-            _safe_text(job, S["p_text"])
-            if os.environ.get("WEB_RESEARCH", "1") == "1":
+            _safe_text(job, S["p_" + job["text_task"]] if job["text_task"] in ("transcript", "summary") else S["p_text"])
+            if job["text_task"] == "explain" and os.environ.get("WEB_RESEARCH", "1") == "1":
                 prepare_sources(job, images, texts, workdir, visuals_on=False)
             deliver(job, answer(job))
             return
