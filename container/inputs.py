@@ -15,6 +15,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+import speech
 
 log = logging.getLogger("inputs")
 
@@ -122,7 +123,7 @@ def _frames_from_video(data, content_type):
         src = os.path.join(d, "clip" + {"video/webm": ".webm", "video/quicktime": ".mov"}.get(content_type, ".mp4"))
         with open(src, "wb") as f:
             f.write(data)
-        probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src],
+        probe = subprocess.run(["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration", "-of", "csv=p=0", src],
                                capture_output=True, text=True, timeout=20)
         duration = float(probe.stdout.strip() or 0)
         if duration <= 0:
@@ -130,11 +131,14 @@ def _frames_from_video(data, content_type):
         frames = []
         for k in range(STORYBOARD_FRAMES):
             out = os.path.join(d, f"f{k}.png")
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{(k + 0.5) * duration / STORYBOARD_FRAMES:.3f}",
+            timestamp = (k + 0.5) * duration / STORYBOARD_FRAMES
+            subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-protocol_whitelist", "file,pipe", "-ss", f"{timestamp:.3f}",
                             "-i", src, "-frames:v", "1", "-vf", "scale=640:-2", out], timeout=30, check=False)
             if os.path.exists(out):
                 with Image.open(out) as im:
-                    frames.append(im.convert("RGB"))
+                    frame = im.convert("RGB")
+                    frame.info["timestamp_seconds"] = timestamp
+                    frames.append(frame)
         return frames or None
 
 
@@ -170,6 +174,11 @@ def storyboard(data, content_type):
         sheet.paste(frame, (x, y))
         draw.rectangle((x, y, x + 34, y + 34), fill=(0, 0, 0))
         draw.text((x + 9, y + 2), str(k + 1), fill=(255, 220, 80), font=font)
+        if "timestamp_seconds" in frame.info:
+            seconds = int(frame.info["timestamp_seconds"])
+            stamp = f"{seconds // 60:02d}:{seconds % 60:02d}"
+            draw.rectangle((x + frame.width - 110, y, x + frame.width, y + 34), fill=(0, 0, 0))
+            draw.text((x + frame.width - 105, y + 2), stamp, fill=(255, 220, 80), font=font)
     out = io.BytesIO()
     sheet.save(out, "JPEG", quality=85)
     return out.getvalue(), len(frames)
@@ -324,7 +333,7 @@ def _embed_media(e):
         caption = e.get("title") or "Link preview image from the Discord message"
     info = {"caption": caption, "credit": provider or "Референс из сообщения", "source_url": e.get("url") or ""}
     video = (e.get("video") or {}).get("url")
-    if video and gif_like:
+    if video and (gif_like or urllib.parse.urlsplit(video).path.lower().endswith((".mp4", ".webm", ".mov"))):
         yield video, "video/mp4", info
     for key in ("image", "thumbnail"):
         u = (e.get(key) or {}).get("url")
@@ -343,8 +352,8 @@ class AttachmentUnavailable(Exception):
 def _is_document(attachment):
     ctype = (attachment.get("content_type") or "").lower()
     name = (attachment.get("filename") or "").lower()
-    return not (ctype.startswith(("image/", "video/")) or name.endswith(
-        (".png", ".jpg", ".jpeg", ".webp", ".gif", ".apng", ".mp4", ".webm", ".mov")))
+    return not (ctype.startswith(("image/", "video/", "audio/")) or name.endswith(
+        (".png", ".jpg", ".jpeg", ".webp", ".gif", ".apng", ".mp4", ".webm", ".mov") + speech.AUDIO_EXTENSIONS))
 
 
 def collect(job):
@@ -363,6 +372,7 @@ def collect(job):
     job["primary_x"] = any(links._x_match(u.rstrip(".,;:!?)»")) for u in URL_RE.findall(direct_text))
     image_limit = MAX_THREAD_IMAGES if job["primary_x"] else MAX_IMAGES
     job["source_warnings"], job["thread_sources"] = [], []
+    transcripts = speech.Collector(job, texts)
 
     # 1. conversation context (needs DISCORD_BOT_TOKEN, bot in the server, Message Content intent)
     n_ctx = max(0, min(50, int(job.get("context_messages", 10 if job.get("kind") == "message" else 0) or 0)))
@@ -414,12 +424,19 @@ def collect(job):
     originals, original_bytes = [], 0
     job["image_originals"] = originals
 
-    def add_image(data, ctype, info):
+    def add_image(data, ctype, info, with_speech=True):
         """Stills go in as they are; GIFs, animated stickers and short videos become one numbered storyboard."""
         nonlocal original_bytes
+        ctype = (ctype or "").lower()
+        if with_speech and (ctype in VIDEO_TYPES or ctype.startswith("audio/")):
+            label = info.get("caption") or "Supplied media"
+            if info.get("source_url"):
+                label += " — " + info["source_url"]
+            transcripts.add(data, label)
+        if ctype.startswith("audio/"):
+            return True
         if len(images) >= image_limit:
             return False
-        ctype = (ctype or "").lower()
         board = storyboard(data, ctype) if ctype in VIDEO_TYPES or ctype.startswith("image/") else None
         if board:
             what = "video" if ctype in VIDEO_TYPES else "animation"
@@ -445,12 +462,18 @@ def collect(job):
                 original_bytes += len(data)
         return bool(blk)
 
-    def fetch_media(url, ctype_hint, info, max_bytes=MAX_DOWNLOAD):
+    def fetch_media(url, ctype_hint, info, max_bytes=None, with_speech=True):
         try:
-            data, ct = fetch(url, max_bytes=max_bytes)
-            return add_image(data, ct or ctype_hint, info)
+            media = ctype_hint in VIDEO_TYPES or ctype_hint.startswith("audio/")
+            download_limit = max_bytes or (speech.MAX_MEDIA_BYTES if media else MAX_DOWNLOAD)
+            options = {"timeout": 25} if download_limit > MAX_DOWNLOAD else {}
+            data, ct = fetch(url, max_bytes=download_limit, **options)
+            ctype = ctype_hint if ct in ("", "application/octet-stream") else ct
+            return add_image(data, ctype, info, with_speech=with_speech)
         except Exception as ex:
             log.warning("media %s skipped: %s", (url or "")[:80], ex)
+            if with_speech and (ctype_hint in VIDEO_TYPES or ctype_hint.startswith("audio/")):
+                transcripts.warning("speech_unavailable")
             return False
 
     from_message = {"caption": "Reference supplied in the Discord conversation", "credit": "Референс из сообщения"}
@@ -463,6 +486,11 @@ def collect(job):
     for a in attachments:
         ctype = (a.get("content_type") or "").lower()
         name = a.get("filename") or "file"
+        if not ctype or ctype == "application/octet-stream":
+            if name.lower().endswith(speech.AUDIO_EXTENSIONS):
+                ctype = "audio/unknown"
+            elif name.lower().endswith((".mp4", ".webm", ".mov")):
+                ctype = "video/webm" if name.lower().endswith(".webm") else "video/mp4"
         url = a.get("url") or a.get("proxy_url")
         if not url:
             if document_source is not None and _is_document(a):
@@ -490,11 +518,19 @@ def collect(job):
             elif ctype.startswith("image/") and len(images) < image_limit:
                 data, _ = fetch(url)
                 add_image(data, ctype, from_message)
-            elif ctype in VIDEO_TYPES and (a.get("size") or 0) <= MAX_DOWNLOAD and len(images) < image_limit:
-                data, _ = fetch(url)
-                shown = add_image(data, ctype, {**from_message, "caption": f"Video {name} from the Discord conversation"})
+            elif ctype in VIDEO_TYPES or ctype.startswith("audio/"):
+                if transcripts.count >= speech.MAX_CLIPS and (ctype.startswith("audio/") or len(images) >= image_limit):
+                    transcripts.warning("speech_limit")
+                    texts.append(f'<attachment name="{html.escape(name, quote=True)}">[speech not read: clip limit]</attachment>')
+                    continue
+                if (a.get("size") or 0) > speech.MAX_MEDIA_BYTES:
+                    transcripts.warning("speech_unavailable")
+                    texts.append(f'<attachment name="{html.escape(name, quote=True)}">[media exceeds 50 MiB; not read]</attachment>')
+                    continue
+                data, _ = fetch(url, max_bytes=speech.MAX_MEDIA_BYTES, timeout=25)
+                shown = add_image(data, ctype, {**from_message, "caption": f"Media {name} from the Discord conversation"})
                 texts.append(f"<attachment name=\"{name}\" type=\"{ctype}\">"
-                             f"{'[video: frames are attached as a storyboard image; the sound is not available]' if shown else '[not read]'}</attachment>")
+                             f"{'[media processed; see attached frames and media_transcript for speech availability]' if shown else '[visual frames unavailable; see media_transcript for speech]'}</attachment>")
             elif name.lower().endswith(TEXT_EXT) and (a.get("size") or 0) < 500_000:
                 data, _ = fetch(url, max_bytes=500_000)
                 if document_source is not None and not data.strip():
@@ -508,6 +544,8 @@ def collect(job):
             raise
         except Exception as e:
             log.warning("attachment read failed: %s", type(e).__name__)
+            if ctype in VIDEO_TYPES or ctype.startswith("audio/"):
+                transcripts.warning("speech_unavailable")
             if document_source is not None and _is_document(a):
                 raise AttachmentUnavailable(name, "download") from e
     for source in sources:
@@ -538,10 +576,14 @@ def collect(job):
         if page.get("image_data"):
             add_image(page["image_data"], page.get("image_type") or "image/*", page["image_meta"])
         for ref in page.get("images") or []:
-            if len(images) >= image_limit:
+            is_media = ref.get("type") in VIDEO_TYPES or str(ref.get("type", "")).startswith("audio/")
+            speech_available = is_media and os.environ.get("SPEECH_RECOGNITION", "1") == "1" and transcripts.count < speech.MAX_CLIPS
+            if len(images) >= image_limit and not speech_available:
                 if page.get("thread"):
                     job["source_warnings"].append("thread_media")
-                break
+                if is_media and transcripts.count >= speech.MAX_CLIPS:
+                    transcripts.warning("speech_limit")
+                continue
             info = {k: ref.get(k, "") for k in ("caption", "credit", "source_url")}
             shown = fetch_media(ref["url"], ref.get("type") or "", info)
             if not shown and ref.get("fallback_url"):
@@ -582,7 +624,7 @@ def collect(job):
             candidates += list(_embed_media(e))[:1]
         for url, ctype, extra in candidates:
             if url and fetch_media(url, ctype, {**posted, **extra, "caption": posted["caption"] + (
-                    f"; {extra['caption']}" if extra.get("caption") else "")}):
+                    f"; {extra['caption']}" if extra.get("caption") else "")}, max_bytes=MAX_DOWNLOAD, with_speech=False):
                 taken += 1
                 break
 

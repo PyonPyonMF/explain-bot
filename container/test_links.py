@@ -37,7 +37,7 @@ class XTests(unittest.TestCase):
         for expected in ("Garry Tan (@garrytan)", "Startups win by shipping.", "alt text: A chart", "video, 1:15",
                          "Quoted post by Paul (@paulg)", "Quoted words", "Context added by readers", "likes 1 200"):
             self.assertIn(expected, page["text"])
-        self.assertEqual([i["url"] for i in page["images"]], ["https://pbs.twimg.com/media/a.jpg", "https://pbs.twimg.com/thumb.jpg"])
+        self.assertEqual([i["url"] for i in page["images"]], ["https://pbs.twimg.com/media/a.jpg", "https://video.twimg.com/v.mp4", "https://pbs.twimg.com/thumb.jpg"])
         self.assertEqual(page["links"], ["https://example.com/essay"])
 
     def test_second_mirror_then_generic_preview_when_apis_fail(self):

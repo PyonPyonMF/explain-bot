@@ -120,7 +120,8 @@ def _fx_post(t, depth=0):
         kind = item.get("type") or "photo"
         url = item.get("url") if kind == "photo" else item.get("thumbnail_url")
         media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": item.get("duration"),
-                      "video_url": item.get("url") if kind in ("video", "gif") and item.get("format") == "video/mp4" else None})
+                      "video_url": item.get("url") if kind in ("video", "gif") and (item.get("format") == "video/mp4"
+                          or urllib.parse.urlsplit(item.get("url") or "").path.lower().endswith(".mp4")) else None})
     poll = [(c.get("label"), c.get("percentage")) for c in (t.get("poll") or {}).get("choices") or []]
     note = t.get("community_note")
     article = t.get("article") or {}
@@ -148,7 +149,9 @@ def _vx_post(t, depth=0):
         kind = "photo" if kind == "image" else kind
         url = item.get("url") if kind == "photo" else item.get("thumbnail_url")
         seconds = (item.get("duration_millis") or 0) / 1000 or None
-        media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": seconds})
+        media.append({"type": kind, "url": url, "alt": item.get("altText") or "", "duration": seconds,
+                      "video_url": item.get("url") if kind in ("video", "gif") and
+                          urllib.parse.urlsplit(item.get("url") or "").path.lower().endswith(".mp4") else None})
     return {
         "name": t.get("user_name"), "handle": t.get("user_screen_name"), "date": t.get("date"),
         "text": t.get("text") or "", "reply_to": t.get("replyingTo"), "media": media, "poll": [], "note": None,
@@ -182,7 +185,8 @@ def _x_text(post, label="X (Twitter) post"):
         if item["alt"]:
             bits.append(f"alt text: {item['alt']}")
         if item["type"] != "photo":
-            bits.append("visual frames are supplied separately when available; audio is not transcribed")
+            bits.append("visual frames and a media_transcript are supplied separately when available; "
+                        "only claim to know spoken words if a successful transcript is present")
         lines.append(f"Media {k}: " + ", ".join(bits))
     if post["poll"]:
         lines.append("Poll: " + "; ".join(f"{label} — {pct}%" for label, pct in post["poll"]))
@@ -196,7 +200,7 @@ def _x_text(post, label="X (Twitter) post"):
     return "\n".join(lines)
 
 
-def _x_images(post, source_url, storyboards=False):
+def _x_images(post, source_url, storyboards=True):
     out = []
     article, credit = post["article"], f"@{post['handle']} (X)" if post["handle"] else "X post"
     if article:  # the article's own diagrams explain more than its cover
@@ -210,13 +214,14 @@ def _x_images(post, source_url, storyboards=False):
     for p in (post, post["quote"]) if post["quote"] else (post,):
         credit = f"@{p['handle']} (X)" if p["handle"] else "X post"
         for item in p["media"]:
-            if item["url"]:
-                if storyboards and item.get("video_url") and 0 < (item.get("duration") or 0) <= 60:
+            if item["url"] or item.get("video_url"):
+                if storyboards and item.get("video_url"):
                     out.append({"url": item["video_url"], "type": "video/mp4", "fallback_url": item["url"],
-                                "caption": f"Short video from the X post by {credit}", "credit": credit,
+                                "caption": f"Video from the X post by {credit}", "credit": credit,
                                 "source_url": p["url"] or source_url})
-                    out.append({"url": item["url"], "caption": f"Full-size preview of that X video by {credit}; use this to read small diagram labels",
-                                "credit": credit, "source_url": p["url"] or source_url})
+                    if item["url"]:
+                        out.append({"url": item["url"], "caption": f"Full-size preview of that X video by {credit}; use this to read small diagram labels",
+                                    "credit": credit, "source_url": p["url"] or source_url})
                     continue
                 what = "Photo" if item["type"] == "photo" else "Video frame"
                 out.append({"url": item["url"], "caption": f"{what} from the linked X post by {credit}",
@@ -528,14 +533,16 @@ def _parse_html(raw):
 
 
 def read_generic(url):
-    data, ctype = fetch(url, max_bytes=MAX_DOWNLOAD)
+    from speech import AUDIO_EXTENSIONS, MAX_MEDIA_BYTES
+    media_file = urllib.parse.urlsplit(url).path.lower().endswith((".mp4", ".webm", ".mov") + AUDIO_EXTENSIONS)
+    data, ctype = fetch(url, max_bytes=MAX_MEDIA_BYTES if media_file else MAX_DOWNLOAD)
     original, gif_site = unproxy(url), gif_host(url)
-    if ctype.startswith("image/") or ctype in VIDEO_TYPES:
+    if ctype.startswith(("image/", "audio/")) or ctype in VIDEO_TYPES:
         # A direct picture, GIF or short clip: inputs.collect turns animations into a storyboard.
-        what = f"Reaction GIF from {gif_site}" if gif_site else "Video from the shared link" if ctype in VIDEO_TYPES else "Image from the shared link"
-        text = (f"{what} (a direct media file without a title: judge it by its frames and the conversation)"
-                if gif_site or ctype in VIDEO_TYPES else "")
-        return {"kind": "gif" if gif_site else "video" if ctype in VIDEO_TYPES else "image", "text": text, "links": [],
+        what = f"Reaction GIF from {gif_site}" if gif_site else "Audio from the shared link" if ctype.startswith("audio/") else "Video from the shared link" if ctype in VIDEO_TYPES else "Image from the shared link"
+        text = (f"{what} (use supplied frames and media_transcript when available)"
+                if gif_site or ctype in VIDEO_TYPES or ctype.startswith("audio/") else "")
+        return {"kind": "gif" if gif_site else "audio" if ctype.startswith("audio/") else "video" if ctype in VIDEO_TYPES else "image", "text": text, "links": [],
                 "image_data": data, "image_type": ctype, "images": [],
                 "image_meta": {"caption": what, "credit": gif_site or _host(original), "source_url": original}}
     if ctype not in ("text/html", "application/xhtml+xml", "") and not ctype.startswith("text/"):

@@ -13,7 +13,7 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   Pasted quotes and forwarded posts are also supported. The bot replies with progress, then attaches the video
   to that same reply; it ignores other bots and does not ping participants.
   Reaction GIFs (Discord's Klipy picker, Tenor, Giphy, direct or Discord-proxied GIF/mp4 links, uploads), animated
-  stickers and short videos are shown to the model as one storyboard of six numbered frames, together with the
+  stickers and videos are shown to the model as one storyboard of six numbered frames (with timestamps for video), together with the
   GIF's title and tags, so "@BigBro что он имел ввиду?" explains what the GIF shows and what it answers in the
   discussion. Pictures and GIFs from the two latest media posts of the recent discussion are included as well.
 - Reply to a bot video with `@BigBro` and a follow-up question to receive another narrated video with a short
@@ -55,7 +55,7 @@ Videos can use actual image references instead of drawing every object with geom
   are retried the way Discord's link-preview crawler sees them.
 - X thread links use FxTwitter's v2 thread reader, including links to the middle of a thread. The author's
   posts are deduplicated and ordered, with quotes attributed separately. Up to 80 posts, 80,000 characters
-  and 12 visual inputs are read; short videos become numbered storyboards. Direct X links exclude unrelated
+  and 12 visual inputs are read; downloadable videos become numbered storyboards. Direct X links exclude unrelated
   Discord history. Missing posts, read limits and unavailable media are disclosed under the resulting video;
   a single-post fallback is never presented as a complete thread.
 - Reference pictures are searched on the web: Wikimedia Commons and Openverse (openly licensed, no key needed),
@@ -73,6 +73,17 @@ Videos can use actual image references instead of drawing every object with geom
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.
   Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.
 Source links/credits accompany the finished video, and generated illustrations are labeled as such.
+
+Speech in supplied Discord videos, voice messages/audio files, direct media URLs and downloadable X clips
+is transcribed by ElevenLabs Scribe v2 using the existing `ELEVENLABS_API_KEY`. Timestamped turns and anonymous
+speaker labels accompany the video frames, and are reused by follow-up memory. No transcription is triggered
+for unrelated media picked up from recent chat. Audio is decoded locally to a single 16 kHz track before upload;
+temporary source/audio files are removed after processing. Supported media downloads are capped at 50 MiB,
+with at most two clips transcribed per request and the first 300 seconds of each by default. Duplicate media
+within a request is transcribed once. Missing audio, failures and truncated speech are distinguished in the
+model input; failures and limits are also disclosed to the user. YouTube links still provide metadata and a
+thumbnail only. Speech recognition is separately billed by ElevenLabs. `SPEECH_RECOGNITION=0` disables it,
+`SPEECH_MAX_SECONDS` changes the per-clip cap (up to 900), and `ELEVENLABS_STT_MODEL` selects the Scribe model.
 
 Claude requests cache their stable system instructions (including the scene schema and animation API)
 with a one-hour TTL, shared across jobs within the API workspace. Dynamic questions, source material and
