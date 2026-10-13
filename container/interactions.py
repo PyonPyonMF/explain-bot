@@ -11,7 +11,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
-from render_modes import mention_mode, selected_mode
+from render_modes import mention_mode, selected_mode, response_format
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -28,11 +28,11 @@ FORM_TTL = 900
 
 STRINGS = {
     "ru": {"empty": "В этом сообщении нечего объяснять.", "expired": "Форма устарела. Вызови команду ещё раз.",
-           "limit": "Лимит: {} видео в день. Попробуй завтра.", "busy": "⚠️ Сервер видео сейчас занят. Попробуй через пару минут.",
+           "limit": "Лимит: {} объяснений в день. Попробуй завтра.", "busy": "⚠️ Сервер сейчас занят. Попробуй через пару минут.",
            "modal_title": "Что объяснить в этом сообщении?", "modal_label": "Вопрос (можно пусто)",
            "modal_placeholder": "например: кто тут прав и почему?"},
     "en": {"empty": "There is nothing to explain in this message.", "expired": "This form expired. Run the command again.",
-           "limit": "Limit: {} videos per day. Try again tomorrow.", "busy": "⚠️ The video server is busy. Try again in a few minutes.",
+           "limit": "Limit: {} explanations per day. Try again tomorrow.", "busy": "⚠️ The server is busy. Try again in a few minutes.",
            "modal_title": "What should I explain here?", "modal_label": "Question (optional)",
            "modal_placeholder": "e.g. who is right here and why?"},
 }
@@ -112,9 +112,16 @@ class State:
 
     def get_explanation(self, channel, message):
         with self.lock:
-            row = self.db.execute("SELECT payload FROM explanations WHERE channel=? AND message=? AND created>=?",
-                                  (str(channel), str(message), time.time() - 30 * 86400)).fetchone()
-            return json.loads(row[0]) if row else None
+            for _ in range(2):  # Continuation messages of a long text answer point to its first message.
+                row = self.db.execute("SELECT payload FROM explanations WHERE channel=? AND message=? AND created>=?",
+                                      (str(channel), str(message), time.time() - 30 * 86400)).fetchone()
+                if not row:
+                    return None
+                record = json.loads(row[0])
+                if not record.get("alias_of"):
+                    return record
+                message = record["alias_of"]
+            return None
 
 
 _state = None
@@ -256,6 +263,8 @@ def handle(i, enqueue):
     else:
         return 400, {"error": "unsupported interaction"}
 
+    job["response_format"] = response_format(job.get("question") or job.get("text") or "")
+    job["private"] = private
     user = ((i.get("member") or {}).get("user") or {}).get("id") or (i.get("user") or {}).get("id") or "unknown"
     limit = int(os.environ.get("DAILY_LIMIT") or 0)
     if limit > 0 and not state().take_quota(user, limit):

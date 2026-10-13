@@ -13,7 +13,7 @@ import urllib.request
 import discord
 
 import interactions as I
-from render_modes import mention_mode
+from render_modes import mention_mode, response_format
 
 log = logging.getLogger("gateway")
 
@@ -23,7 +23,8 @@ MENTION_STRINGS = {
         "context": "Объясни, что здесь обсуждают, с учётом приложенных материалов.",
         "attachment": "Объясни содержание приложенного материала.",
         "followup": "🎬 Сделаю ещё одно видео с ответом на уточнение…",
-        "followup_question": "Объясни предыдущий ролик подробнее и проще.",
+        "text": "💬 Отвечу текстом…",
+        "followup_question": "Объясни предыдущий ответ подробнее и проще.",
         "followup_unavailable": "Не удалось восстановить материал предыдущего ролика. Пришли исходную ссылку или файл вместе с вопросом и упоминанием бота.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
         "failed": "⚠️ Не получилось принять запрос. Попробуй ещё раз.",
@@ -33,7 +34,8 @@ MENTION_STRINGS = {
         "context": "Explain the discussion here, taking the attached material into account.",
         "attachment": "Explain the content of the attached material.",
         "followup": "🎬 I'll make another video answering your follow-up…",
-        "followup_question": "Explain the previous video more clearly and in more detail.",
+        "text": "💬 I'll answer in text…",
+        "followup_question": "Explain the previous answer more clearly and in more detail.",
         "followup_unavailable": "I couldn't recover the previous video's source. Send the original link or file with your question and mention the bot.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
         "failed": "⚠️ Could not accept this request. Please try again.",
@@ -100,7 +102,8 @@ async def mention_job(message, bot_id, depth=0):
     own["content"] = text
     job = {"channel_id": str(message.channel.id), "context_before_id": str(message.id),
            "context_messages": max(0, min(50, int(os.environ.get("MENTION_CONTEXT_MESSAGES") or 10))),
-           "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode}
+           "bot_user_id": str(bot_id), "locale": os.environ.get("BOT_LANG") or "ru", "render_mode": mode,
+           "response_format": response_format(text)}
     target = None
     ref = message.reference
     if ref and ref.type == discord.MessageReferenceType.default and ref.message_id:
@@ -222,6 +225,7 @@ class ExplainBot(discord.Client):
         # but do not start work until Discord has accepted the deferred response.
         self.slots = threading.BoundedSemaphore(max(0, int(os.environ.get("MAX_QUEUED_JOBS") or 4)) + 1)
         self.renderer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="render")
+        self.text_responder = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="text")
 
     async def setup_hook(self):
         app = await asyncio.to_thread(bot_request, self.bot_token, "/applications/@me")
@@ -240,6 +244,10 @@ class ExplainBot(discord.Client):
             handle_job(job)
         finally:
             self.slots.release()
+
+    def submit(self, job):
+        worker = self.text_responder if job.get("response_format") == "text" else self.renderer
+        worker.submit(self.render, job)
 
     async def on_message(self, message):
         if (not self.intents.messages or not self.user or message.author.bot or message.webhook_id
@@ -264,9 +272,10 @@ class ExplainBot(discord.Client):
             if limit > 0 and not await asyncio.to_thread(I.state().take_quota, str(message.author.id), limit):
                 await reply(I._S()["limit"].format(limit))
                 return
-            status = await reply(mention_strings()["followup" if job.get("followup") else "accepted"])
+            accepted = "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
+            status = await reply(mention_strings()[accepted])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
-            self.renderer.submit(self.render, job)
+            self.submit(job)
             submitted = True
         except QuotedMessageUnavailable:
             await reply(mention_strings()["unavailable"])
@@ -316,7 +325,7 @@ class ExplainBot(discord.Client):
                         return
             await respond(interaction, response)
             for job in reserved[:]:
-                self.renderer.submit(self.render, job)
+                self.submit(job)
                 reserved.remove(job)
         except Exception:
             # Avoid logging payloads, which contain interaction tokens and user content.
@@ -328,6 +337,7 @@ class ExplainBot(discord.Client):
     async def close(self):
         await super().close()
         self.renderer.shutdown(wait=False, cancel_futures=True)
+        self.text_responder.shutdown(wait=False, cancel_futures=True)
 
 
 def main():

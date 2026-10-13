@@ -44,6 +44,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.bot._connection.user = SimpleNamespace(id=999)
         self.submit = Mock()
         self.bot.renderer.submit = self.submit
+        self.text_submit = Mock()
+        self.bot.text_responder.submit = self.text_submit
 
     async def asyncTearDown(self):
         await self.bot.close()
@@ -220,6 +222,65 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.submit.assert_not_called()
         msg.reply.assert_not_awaited()
         self.assertEqual(I.state().db.execute("SELECT count(*) FROM quota").fetchone()[0], 0)
+
+    async def test_text_request_uses_text_worker_and_acknowledges_text(self):
+        msg = message("<@999> обьясни текстом, что такое редьюсер")
+        self.text_submit.side_effect = lambda *args: msg.reply.assert_awaited_once()
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.assertEqual(self.text_submit.call_args.args[1]["response_format"], "text")
+        self.assertIn("текстом", msg.reply.call_args.args[0])
+        self.assertNotIn("видео", msg.reply.call_args.args[0])
+
+    async def test_text_request_still_requires_a_mention(self):
+        msg = message("Объясни текстом, что такое редьюсер")
+        await self.bot.on_message(msg)
+        self.submit.assert_not_called()
+        self.text_submit.assert_not_called()
+        msg.reply.assert_not_awaited()
+
+    async def test_text_followup_reuses_the_video_context(self):
+        saved = {"source": {"texts": ["Root source"]}, "history": [{"title": "Reducer", "narration": "Old narration"}]}
+        I.state().put_explanation("789", "200", saved)
+        target = message("Video reply", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        await self.bot.on_message(message("<@999> Объясни текстом на примере", reference=ref))
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual(job["followup"], saved)
+        self.assertEqual(job["response_format"], "text")
+        self.submit.assert_not_called()
+
+    async def test_format_is_per_request_and_text_can_be_followed_by_video(self):
+        saved = {"source": {"texts": ["Root source"]}, "history": [{"format": "text", "text": "Earlier text answer"}]}
+        I.state().put_explanation("789", "200", saved)
+        target = message("Earlier text answer", mid=200)
+        target.author = SimpleNamespace(id=999, name="Bot", global_name=None, bot=True)
+        ref = discord.MessageReference(message_id=200, channel_id=789)
+        ref.resolved = target
+        await self.bot.on_message(message("<@999> Покажи другой пример", reference=ref))
+        job = self.submit.call_args.args[1]
+        self.assertEqual(job["response_format"], "video")
+        self.assertEqual(job["followup"]["history"][0]["text"], "Earlier text answer")
+        self.text_submit.assert_not_called()
+
+    async def test_private_slash_query_can_request_text_even_with_3d_option(self):
+        i = interaction({"type": 1, "name": "explain", "options": [{"name": "query", "value": "Объясни текстом маятник"},
+                        {"name": "mode", "value": "3d"}, {"name": "private", "value": True}]})
+        await self.bot.on_interaction(i)
+        job = self.text_submit.call_args.args[1]
+        self.assertTrue(job["private"])
+        self.assertEqual(job["response_format"], "text")
+        i.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
+        self.submit.assert_not_called()
+
+    async def test_text_directive_inside_target_post_is_not_a_format_request(self):
+        i = interaction({"type": 3, "name": "Explain (video)", "target_id": "91", "resolved": {"messages": {
+            "91": {"id": "91", "content": "объясни текстом", "attachments": []}}}})
+        await self.bot.on_interaction(i)
+        self.assertEqual(self.submit.call_args.args[1]["response_format"], "video")
+        self.text_submit.assert_not_called()
 
     async def test_mentioned_reply_uses_saved_script_and_accepts_another_video(self):
         saved = {"root_id": "200", "source": {"texts": ["Original source"], "images": []},

@@ -18,11 +18,17 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   discussion. Pictures and GIFs from the two latest media posts of the recent discussion are included as well.
 - Reply to a bot video with `@BigBro` and a follow-up question to receive another narrated video with a short
   text excerpt of the answer. A reply
-  without the explicit mention is ignored. Each video keeps its own source snapshot, narration and up to
+  without the explicit mention is ignored. Each explanation keeps its own source snapshot, narration or text, and up to
   eight turns, scoped to that Discord channel and reply branch. Public mention replies are retained in the
-  existing database for up to 30 days (the latest 100 videos, at most 2 MB per record); interaction tokens,
+  existing database for up to 30 days (the latest 100 messages, including continuations, at most 2 MB per record); interaction tokens,
   API credentials and generated animation code are not stored. For older videos without saved narration,
   the bot tries to recover the original request and clearly marks that narration unavailable to the model.
+- Add `объясни текстом` (also `обьясни текстом` or `ответь текстом`) to any request to receive a text answer
+  without video generation, TTS or generated illustrations. This works for new questions and follow-ups;
+  the explicit bot mention is still required. Long text is delivered in multiple messages without cutting
+  off the answer. Replies to any part retain the same context. Each new request selects its own format:
+  without an explicit text request, the bot makes a video again. Text requests have a separate worker so
+  they do not wait for an active video render, while sharing the total queue and daily request limit.
 
 Videos can use actual image references instead of drawing every object with geometric primitives:
 - An explicitly attached PDF is the primary subject: the bot reads its text and up to four labeled page previews.
@@ -330,7 +336,7 @@ Cloudflare builds the container image from `container/Dockerfile` on each push t
 |---|---|---|
 | `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | model for the plan |
 | `ELEVENLABS_MODEL` | `eleven_multilingual_v2` | TTS model |
-| `DAILY_LIMIT` | `5` | videos per user per UTC day; `0` = no limit |
+| `DAILY_LIMIT` | `5` | explanations per user per UTC day; `0` = no limit |
 | `MAX_UPLOAD_MB` | `9.5` | target file size; larger videos are re-encoded |
 | `BOT_LANG` | `ru` | language of the bot's own status messages (`ru`/`en`) |
 | `RENDER_INSTANCES` | `2` | how many container instances share the jobs |

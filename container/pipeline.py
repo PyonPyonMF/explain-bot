@@ -30,12 +30,16 @@ DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 
 STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
+           "text_failed": "⚠️ Не получилось подготовить ответ текстом. Попробуй ещё раз или уточни вопрос.",
+           "p_text": "💬 Читаю материал и готовлю ответ текстом…",
            "p_visuals": "🖼️ Проверяю факты, подбираю референсы и иллюстрации…",
            "refused": "⚠️ Не буду это объяснять: {}", "bad_plan": "⚠️ Модель вернула неправильный план видео. Попробуй ещё раз.",
            "too_big": "⚠️ Видео получилось слишком большим для Discord.",
            "p_write": "✍️ Пишу сценарий и анимацию…", "p_review": "🔎 Проверяю кадры (раунд {})…",
            "p_render": "🎬 Рендерю видео…"},
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
+           "text_failed": "⚠️ Could not prepare the text answer. Try again or narrow the question.",
+           "p_text": "💬 Reading the material and preparing a text answer…",
            "p_visuals": "🖼️ Checking facts, finding references and illustrations…",
            "refused": "⚠️ I will not explain this: {}", "bad_plan": "⚠️ The model returned an invalid video plan. Try again.",
            "too_big": "⚠️ The video is too large for Discord.",
@@ -377,16 +381,23 @@ def discord_text(job, content):
            "discord")
 
 
+def source_notices(job):
+    notices = []
+    warnings = set(job.get("source_warnings") or [])
+    if warnings & {"thread_unavailable", "thread_gap", "thread_limit"}:
+        notices.append("⚠️ Тред прочитан частично: некоторые посты недоступны или достигнут лимит чтения." if BOT_LANG == "ru" else "⚠️ Only part of the thread was read: some posts are unavailable or the reading limit was reached.")
+    if "thread_media" in warnings:
+        notices.append("⚠️ Не все вложения треда удалось просмотреть полностью." if BOT_LANG == "ru" else "⚠️ Not all thread media could be inspected in full.")
+    return notices
+
+
 def discord_video(job, path, title, debug=""):
     boundary = uuid.uuid4().hex
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
     if job.get("followup") and (job.get("video_script") or {}).get("excerpt"):
         content += "\n\n" + job["video_script"]["excerpt"]
-    warnings = set(job.get("source_warnings") or [])
-    if warnings & {"thread_unavailable", "thread_gap", "thread_limit"}:
-        content += "\n⚠️ Тред прочитан частично: некоторые посты недоступны или достигнут лимит чтения." if BOT_LANG == "ru" else "\n⚠️ Only part of the thread was read: some posts are unavailable or the reading limit was reached."
-    if "thread_media" in warnings:
-        content += "\n⚠️ Не все вложения треда удалось просмотреть полностью." if BOT_LANG == "ru" else "\n⚠️ Not all thread media could be inspected in full."
+    for notice in source_notices(job):
+        content += "\n" + notice
     from assets import source_text
     sources = source_text(job)
     if sources:
@@ -438,11 +449,20 @@ def prepare_sources(job, images, texts, workdir, visuals_on=True):
 
 
 def handle_job(job):
+    from render_modes import response_format
+    job.setdefault("response_format", response_format(job.get("question") or job.get("text") or ""))
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
         from followups import prepare
         images, texts, notes = prepare(job, collect)
         job["prepared_inputs"] = (images, texts, notes)
+        if job.get("response_format") == "text":
+            from text_answers import answer, deliver
+            _safe_text(job, S["p_text"])
+            if os.environ.get("WEB_RESEARCH", "1") == "1":
+                prepare_sources(job, images, texts, workdir, visuals_on=False)
+            deliver(job, answer(job))
+            return
         visuals_on = os.environ.get("VISUAL_ASSETS", "1") == "1"
         if visuals_on or os.environ.get("WEB_RESEARCH", "1") == "1":
             _safe_text(job, S["p_visuals"])
@@ -477,7 +497,7 @@ def handle_job(job):
         _safe_text(job, str(e))
     except Exception as e:
         log.exception("job failed")
-        msg = S["failed"]
+        msg = S["text_failed" if job.get("response_format") == "text" else "failed"]
         if os.environ.get("DEBUG_ERRORS") == "1":  # show the reason in Discord while setting up the bot
             ver = (os.environ.get("CODE_VERSION") or "?")[:8]
             msg += f"\n```[{ver}] {type(e).__name__}: {str(e)[:400]}```"

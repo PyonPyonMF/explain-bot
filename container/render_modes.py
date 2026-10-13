@@ -9,3 +9,30 @@ def mention_mode(text):
 
 def selected_mode(value):
     return "3d" if value == "3d" else "2d"
+
+
+def response_format(text):
+    """Read explicit format instructions in the caller's words, not in quoted posts or code."""
+    text = re.sub(r"```[\s\S]*?```|`[^`\n]*`|«[^»]*»|“[^”]*”|\"[^\"\n]*\"|(?<!\w)'[^'\n]*'(?!\w)", " ", text)
+    text = re.sub(r"(?m)^\s*>.*$", " ", text).lower().replace("ё", "е")
+    verb = r"(?:об[ъь]?ясни(?:ть|те)?|об[ъь]?ясняй(?:те)?|поясни(?:ть|те)?|ответь(?:те)?|ответить|расскажи(?:те)?|напиши(?:те)?)"
+    fillers = r"(?:пожалуйста|мне|это|только|просто|коротко|подробнее|все|этот\s+(?:тред|пост|код|пример)|эту\s+статью)"
+    patterns = [
+        ("text", rf"\b{verb}(?:[\s,]+{fillers})*[\s,]+(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)\b"),
+        ("text", rf"\bтекстом[\s,]+{verb}\b"),
+        ("text", r"(?:^|(?<=[,;:!?.\n]))\s*(?:только\s+)?текстом(?:\s+пожалуйста)?\s*(?=[.!?,;:]|$)"),
+        ("text", r"\b(?:можно|давай|нужно|хочу)\s+(?:только\s+)?текстом\b"),
+        ("text", r"\b(?:дай|нужен|хочу|напиши)\s+(?:мне\s+)?текстовый\s+ответ\b"),
+        ("text", r"\b(?:дай|хочу|нужно)\s+(?:об[ъь]?яснение|пояснение)\s+текстом\b"),
+        ("text", r"\b(?:explain|answer|reply)\s+(?:only\s+)?(?:in|with|as)\s+(?:plain\s+)?text\b"),
+        ("video", r"\b(?:сделай|сгенерируй|запиши|об[ъь]?ясни)\s+(?:мне\s+)?(?:видео|ролик)\b"),
+        ("video", r"\bлучше\s+(?:видео|ролик)\b"),
+    ]
+    requests = []
+    for mode, pattern in patterns:
+        for match in re.finditer(pattern, text):
+            before = text[max(0, match.start() - 40):match.start()]
+            if re.search(r"\b(?:не|не надо|не нужно|не хочу|не нужен|do not|don't)\s*$", before):
+                continue
+            requests.append((match.start(), mode))
+    return max(requests)[1] if requests else "video"
