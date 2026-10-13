@@ -25,7 +25,8 @@ def record_script(job, plan):
 
 
 def record_text(job, answer):
-    job["text_answer_record"] = {"format": "text", "title": answer.splitlines()[0][:150], "text": answer[:16_000]}
+    job["text_answer_record"] = {"format": "text", "title": answer.splitlines()[0][:150],
+                                 "text": answer[:26_000 if job.get("text_task") == "research" else 16_000]}
 
 
 def _without_image_listing(texts):

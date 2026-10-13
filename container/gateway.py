@@ -26,6 +26,7 @@ MENTION_STRINGS = {
         "text": "💬 Отвечу текстом…",
         "transcript": "📝 Сделаю текстовую расшифровку речи…",
         "summary": "📝 Расшифрую речь и подготовлю краткое резюме…",
+        "research": "🔎 Начинаю глубокое исследование. Соберу хронологию, версии сторон и источники; вернусь с подробным текстовым разбором…",
         "followup_question": "Объясни предыдущий ответ подробнее и проще.",
         "followup_unavailable": "Не удалось восстановить материал предыдущего ролика. Пришли исходную ссылку или файл вместе с вопросом и упоминанием бота.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
@@ -39,6 +40,7 @@ MENTION_STRINGS = {
         "text": "💬 I'll answer in text…",
         "transcript": "📝 I'll transcribe the speech into text…",
         "summary": "📝 I'll transcribe the speech and prepare a short summary…",
+        "research": "🔎 Starting deep research. I'll return a detailed text report with a chronology, competing accounts and sources…",
         "followup_question": "Explain the previous answer more clearly and in more detail.",
         "followup_unavailable": "I couldn't recover the previous video's source. Send the original link or file with your question and mention the bot.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
@@ -326,7 +328,7 @@ class ExplainBot(discord.Client):
                 await reply(I._S()["limit"].format(limit))
                 return
             job["quota_paid"] = limit > 0
-            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
+            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary", "research") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
             status = await reply(mention_strings()[accepted])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
             self.submit(job)

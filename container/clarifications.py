@@ -14,12 +14,13 @@ ACTIONS = {
     "video": ("video", "explain", "2d"), "text": ("text", "explain", "2d"),
     "transcript": ("text", "transcript", "2d"), "summary": ("text", "summary", "2d"),
     "3d": ("video", "explain", "3d"),
+    "research": ("text", "research", "2d"),
 }
 LABELS = {
     "ru": {"video": "Объяснить видео", "text": "Объяснить текстом", "transcript": "Транскрипция",
-           "summary": "Краткое резюме", "3d": "3D-видео", "edit": "Уточнить запрос", "cancel": "Отмена"},
+           "summary": "Краткое резюме", "3d": "3D-видео", "research": "Исследовать источники", "edit": "Уточнить запрос", "cancel": "Отмена"},
     "en": {"video": "Explain with video", "text": "Explain in text", "transcript": "Transcript",
-           "summary": "Summary", "3d": "3D video", "edit": "Edit request", "cancel": "Cancel"},
+           "summary": "Summary", "3d": "3D video", "research": "Research sources", "edit": "Edit request", "cancel": "Cancel"},
 }
 
 
@@ -137,7 +138,7 @@ def offered(record):
     job = record["job"]
     if not has_material(job) and not job.get("context_messages") and reason(record["request"]) and len(record["request"].split()) <= 4:
         return set()  # Choosing a format cannot fix a missing subject; ask the user to supply it first.
-    return {"video", "text", "3d"} | ({"transcript", "summary"} if speech_possible(record["job"]) else set())
+    return {"video", "text", "3d", "research"} | ({"transcript", "summary"} if speech_possible(record["job"]) else set())
 
 
 def card(key, record):
@@ -166,7 +167,7 @@ def card(key, record):
     rows = [["video", "text"]] if actions else []
     if "transcript" in actions:
         rows.append(["transcript", "summary"])
-    rows.append((["3d"] if actions else []) + ["edit", "cancel"])
+    rows.append((["research", "3d"] if actions else []) + ["edit", "cancel"])
     components = [{"type": 1, "components": [
         {"type": 2, "style": 4 if action == "cancel" else 2, "label": LABELS[lang][action],
          "custom_id": f"clarify:{key}:{record['revision']}:{action}"} for action in row]} for row in rows]
@@ -211,7 +212,7 @@ def _error(code, locale="ru"):
 def handle(interaction, enqueue, state):
     from interactions import _base, _channel, _find_value
     data = interaction.get("data") or {}
-    match = re.fullmatch(r"clarify:([a-f0-9]{32}):(\d+):(video|text|transcript|summary|3d|edit|cancel|form)", str(data.get("custom_id") or ""))
+    match = re.fullmatch(r"clarify:([a-f0-9]{32}):(\d+):(video|text|transcript|summary|research|3d|edit|cancel|form)", str(data.get("custom_id") or ""))
     if not match:
         return _error("invalid", interaction.get("locale", "ru"))
     key, revision, action = match[1], int(match[2]), match[3]

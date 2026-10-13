@@ -277,11 +277,13 @@ def handle(i, enqueue):
 
     job["response_format"] = response_format(job.get("question") or job.get("text") or "")
     job["text_task"] = text_task(job.get("question") or job.get("text") or "")
+    if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "research":
+        job.update(response_format="text", text_task="research")
     job["private"] = private
     user = ((i.get("member") or {}).get("user") or {}).get("id") or (i.get("user") or {}).get("id") or "unknown"
     import clarifications as C
     request = job.get("question") or job.get("text") or ""
-    why = C.reason(request, C.has_material(job))
+    why = None if job["text_task"] == "research" else C.reason(request, C.has_material(job))
     if why:
         key, record = C.create(state(), job, user, _channel(i), request, why, origin="interaction")
         return _reply({"type": CHANNEL_MESSAGE, "data": {**C.card(key, record), "flags": EPHEMERAL if private else 0}})

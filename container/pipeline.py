@@ -402,6 +402,15 @@ def discord_text(job, content):
            "discord")
 
 
+def research_progress(job, content):
+    """Progress is best-effort and must not consume minutes of the investigation budget."""
+    try:
+        body = json.dumps({"content": content[:1900], "allowed_mentions": {"parse": []}}).encode()
+        _http(_discord_url(job), body, _discord_headers(job, "application/json"), method="PATCH", timeout=5)
+    except Exception as exc:
+        log.warning("research progress unavailable: %s", type(exc).__name__)
+
+
 def source_notices(job):
     notices = []
     warnings = set(job.get("source_warnings") or [])
@@ -534,6 +543,13 @@ def handle_job(job):
         job["response_format"] = "text"
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
+        if job["text_task"] == "research":
+            from deep_research import answer as investigate
+            from text_answers import deliver
+            research_progress(job, "🔎 Начинаю подробное исследование источников. Это может занять до 10 минут…" if BOT_LANG == "ru" else
+                       "🔎 Starting a detailed source investigation. This can take up to 10 minutes…")
+            deliver(job, investigate(job, lambda message: research_progress(job, message)))
+            return
         from followups import prepare
         images, texts, notes = prepare(job, collect)
         job["prepared_inputs"] = (images, texts, notes)

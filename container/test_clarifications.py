@@ -95,6 +95,18 @@ class ClarificationTests(unittest.TestCase):
             self.assertNotIn("Original source", response["data"]["content"])
         enqueue.assert_not_called(); self.assertEqual(self.quota(), 0)
 
+    def test_research_choice_uses_deep_text_task_and_one_quota_unit(self):
+        key, record = self.put(question="разбери историю https://forum.example/")
+        choices = C.card(key, record)
+        self.assertTrue(all(len(row["components"]) <= 5 for row in choices["components"]))
+        self.assertIn("research", C.offered(record))
+        enqueue = Mock(return_value=True)
+        _, response = I.handle(self.click(key, "research"), enqueue)
+        job = enqueue.call_args.args[0]
+        self.assertEqual((job["response_format"], job["text_task"]), ("text", "research"))
+        self.assertEqual(self.quota(), 1)
+        self.assertEqual(response["data"]["components"], [])
+
     def test_cancel_expiry_and_duplicate_click_never_start_extra_work(self):
         key, _ = self.put(); enqueue = Mock(return_value=True)
         _, response = I.handle(self.click(key, "cancel"), enqueue)

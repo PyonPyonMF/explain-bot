@@ -95,7 +95,22 @@ Videos can use actual image references instead of drawing every object with geom
 - For public forums such as `forum.ss13.ru`, the research agent can use the forum's own post/member search,
   open topic pages and follow pagination. The IP.Board reader preserves each post's author, date, quotations,
   current signature and member title separately; forum opinions and signatures are not treated as verified
-  historical facts. Each research run reads at most ten forum pages, with per-page text and byte bounds.
+  historical facts. Ordinary research reads at most ten forum pages, with per-page text and byte bounds.
+- **Deep forum research:** `/research` (Russian `/исследование`) takes a question plus public source URL and
+  returns a detailed **text** report. Mention commands `рисерч: ...`, `research: ...`, and a request containing
+  `изучи` plus a forum URL also select it. Example: `рисерч: почему закрылся сервер и как на это повлияла группа?
+  Изучи https://forum.ss13.ru/`. It searches related topics and spelling variants, follows discussion pages,
+  compares contemporary accounts and recollections, and tests the question's premises. Reports cover the direct
+  answer, public actors, chronology, causes/competing accounts, requested relationships and unresolved gaps.
+  Factual paragraphs cite IDs assigned to **opened** source posts/pages; search snippets alone are not evidence.
+  Allegations and inferences are labeled. No unrelated chat-media downloads, ASR, TTS or video rendering occur.
+  Progress updates replace the pending message. Default bounds: 600 seconds including report writing, 48 forum
+  page requests, 12 web searches, 8 web fetches, 22 tool rounds and 180,000 source characters. Configure
+  `DEEP_RESEARCH_TIMEOUT` (120–720), `DEEP_RESEARCH_MAX_PAGES` (8–80), `DEEP_RESEARCH_MAX_SEARCHES` (2–20).
+  The run stops when enough evidence has been examined, repeated attempts yield no new evidence, or a bound is
+  reached. Partial evidence is delivered with scope/gaps; it never claims to have exhausted an entire archive.
+  `/research private:true` keeps the result private. One accepted run uses one normal daily quota unit, but its
+  multi-round model/search calls can cost more than an ordinary explanation. `WEB_RESEARCH=0` disables it too.
   Only source domains named by the user or actually observed in public search results are eligible; access
   restrictions and rate limits are respected. Other forum engines can use site-scoped web search; native search
   requires a supported public form or link. An empty search never proves that information does not exist.

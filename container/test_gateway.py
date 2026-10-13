@@ -428,6 +428,21 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         i.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
         self.submit.assert_not_called()
 
+    async def test_research_slash_and_natural_forum_study_select_text_worker(self):
+        i = interaction({"type": 1, "name": "research", "options": [{"name": "query", "value": "Почему закрылся сервер? https://forum.example/"},
+                        {"name": "private", "value": True}]})
+        await self.bot.on_interaction(i)
+        job = self.text_submit.call_args.args[1]
+        self.assertEqual(job["text_task"], "research")
+        self.assertTrue(job["private"])
+        self.submit.assert_not_called()
+        self.text_submit.reset_mock()
+        msg = message("<@999> какие причины закрытия сервера, изучи https://forum.ss13.ru")
+        await self.bot.on_message(msg)
+        self.assertEqual(self.text_submit.call_args.args[1]["text_task"], "research")
+        self.assertIn("исследование", msg.reply.call_args.args[0])
+        self.submit.assert_not_called()
+
     async def test_text_directive_inside_target_post_is_not_a_format_request(self):
         i = interaction({"type": 3, "name": "Explain (video)", "target_id": "91", "resolved": {"messages": {
             "91": {"id": "91", "content": "объясни текстом", "attachments": []}}}})
@@ -585,7 +600,7 @@ class ConfigurationTests(unittest.TestCase):
         with patch.object(gateway, "bot_request") as request:
             gateway.register_commands("test-token", "456")
         commands = request.call_args.args[2]
-        self.assertEqual({c["name"] for c in commands}, {"help", "explain", "objects", "Explain (video)", I.ASK_COMMAND})
+        self.assertEqual({c["name"] for c in commands}, {"help", "research", "explain", "objects", "Explain (video)", I.ASK_COMMAND})
         self.assertTrue(all(c["integration_types"] == [0] and c["contexts"] == [0, 1] for c in commands))
         original = json.loads(Path(gateway.__file__).with_name("commands.json").read_text())
         self.assertEqual(original[0]["integration_types"], [0, 1])

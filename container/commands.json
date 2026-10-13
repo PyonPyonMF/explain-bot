@@ -1,6 +1,23 @@
 [
   {
     "type": 1,
+    "name": "research",
+    "name_localizations": { "ru": "исследование" },
+    "description": "Investigate public sources and return a detailed report with citations",
+    "description_localizations": { "ru": "Изучить источники и вернуть подробный разбор с хронологией и ссылками" },
+    "integration_types": [0, 1],
+    "contexts": [0, 1, 2],
+    "options": [
+      { "type": 3, "name": "query", "name_localizations": { "ru": "запрос" },
+        "description": "Question and forum/source URL", "description_localizations": { "ru": "Вопрос и ссылка на форум или источник" },
+        "required": true, "max_length": 1500 },
+      { "type": 5, "name": "private", "name_localizations": { "ru": "приватно" },
+        "description": "Only you see the report", "description_localizations": { "ru": "Разбор увидишь только ты" },
+        "required": false }
+    ]
+  },
+  {
+    "type": 1,
     "name": "help",
     "name_localizations": { "ru": "помощь" },
     "description": "All bot features, examples and limits",
@@ -16,6 +33,7 @@
         { "name": "Text, transcripts and summaries", "name_localizations": { "ru": "Текст, транскрипция и резюме" }, "value": "text" },
         { "name": "Video and audio", "name_localizations": { "ru": "Видео и аудио" }, "value": "media" },
         { "name": "Files and links", "name_localizations": { "ru": "Файлы и ссылки" }, "value": "sources" },
+        { "name": "Deep forum research", "name_localizations": { "ru": "Глубокое исследование форума" }, "value": "research" },
         { "name": "Commands and conversation", "name_localizations": { "ru": "Команды и контекст" }, "value": "context" },
         { "name": "3D and object library", "name_localizations": { "ru": "3D и библиотека объектов" }, "value": "3d" },
         { "name": "Limits", "name_localizations": { "ru": "Ограничения" }, "value": "limits" }

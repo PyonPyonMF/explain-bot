@@ -3,7 +3,7 @@ import re
 
 from speech import MAX_CLIPS, MAX_MEDIA_BYTES, max_seconds
 
-SECTIONS = ("overview", "text", "media", "sources", "context", "3d", "limits")
+SECTIONS = ("overview", "text", "media", "sources", "research", "context", "3d", "limits")
 ALIASES = {
     "все": "overview", "начало": "overview", "обзор": "overview", "overview": "overview",
     "текст": "text", "text": "text",
@@ -12,6 +12,7 @@ ALIASES = {
     "video": "media", "audio": "media", "speech": "media", "voice": "media",
     "файлы": "sources", "ссылки": "sources", "материалы": "sources", "pdf": "sources", "sources": "sources",
     "files": "sources", "links": "sources",
+    "research": "research", "рисерч": "research", "ресерч": "research", "форум": "research", "исследование": "research",
     "контекст": "context", "диалог": "context", "команды": "context", "context": "context", "commands": "context",
     "3d": "3d", "3д": "3d", "объекты": "3d", "objects": "3d",
     "лимиты": "limits", "ограничения": "limits", "limits": "limits",
@@ -42,6 +43,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Отвечать текстом:** `объясни что тут говорят текстом`.
 • **Расшифровывать речь:** `сделай транскрипцию видео текстом` — слова с таймкодами.
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
+• **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — подробный текстовый разбор с хронологией и источниками.
 • **Разбирать картинки, схемы и GIF:** прикрепи материал или ответь на сообщение с ним. Для картинок могу сделать вертикальное видео с приближениями и выносками.
 • **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, посты Telegram и Reddit. YouTube — пока только описание и обложка.
 • **Отвечать на уточнения:** ответь на мой результат с упоминанием и новым вопросом. Без упоминания я не вмешиваюсь.
@@ -86,6 +88,18 @@ YouTube пока не расшифровываю. Если доступна то
 • **YouTube:** название, описание и обложка — не содержимое всего ролика.
 
 Для текстового объяснения добавь `объясни текстом`. Для речи и видео см. раздел «Видео и аудио».""",
+            "research": f"""**Глубокое исследование форума**
+`/research` / `/исследование`: укажи вопрос и ссылку в поле «запрос».
+Или напиши {mention} `рисерч: почему закрылся сервер и как на это повлияла группа? Изучи https://forum.ss13.ru/`.
+Фраза `изучи` со ссылкой на форум тоже включает этот режим.
+
+Несколько раундов поиска: связанные темы, страницы обсуждений, разные написания ников, свидетельства до и после события. Затем — подробный **текстовый** разбор: прямой ответ, участники, хронология, версии сторон, возможные причины и влияние группы, ссылки и пробелы.
+
+Обвинения проверяю как предположения. Отдельно отмечаю слова участников и выводы по источникам; мотивы не выдумываю. Подпись под постом не доказывает историческую роль автора.
+
+Обычно до 10 минут, до 48 обращений к страницам форума и 12 веб-поисков. Показываю ход работы. Если данных не хватит, верну собранное и объясню ограничения; весь форум целиком не обещаю прочитать.
+`private` / «приватно» у slash-команды скрывает результат от остальных. Один запрос расходует один пункт обычного дневного лимита; внешние API оплачиваются владельцем бота.
+Уточнение можно задать ответом на разбор с моим упоминанием.""",
             "context": f"""**Команды и продолжение разговора**
 **Упоминание:** {mention} + вопрос. Ответ на чужое сообщение разбирает именно его с доступным контекстом, в том числе пересланные сообщения.
 **Уточнение:** ответь на мой результат с упоминанием и новым вопросом. Например: `объясни на примере текстом`. Без явной просьбы о тексте новый ответ снова будет видео. Без упоминания не отвечаю.
@@ -137,6 +151,7 @@ YouTube пока не расшифровываю. Если доступна то
 • **Text answers:** `explain in text why this works`.
 • **Speech transcripts:** `transcribe this video` — recognized words with timestamps and speaker labels.
 • **Summaries:** `summarize this video` — key points from the speech, not the full transcript.
+• **Deep research:** `/research` or `research: question + forum URL` — a detailed text report with a timeline and citations.
 • **Pictures, diagrams and GIFs:** attach a source or reply to it. Image explanations can use portrait zooms and callouts.
 • **Sources:** PDFs, text/code, web pages, X threads/articles, Telegram and Reddit posts. YouTube currently provides metadata and a thumbnail only.
 • **Follow-ups:** reply to my result with my mention and your next question. No mention means no automatic reply.
@@ -176,6 +191,14 @@ Attach a source and mention me {mention}, or reply to its message.
 • YouTube: title, description and thumbnail only.
 
 Add `explain in text` for a text explanation. See the Video/audio section for speech.""",
+            "research": f"""**Deep forum research**
+Use `/research` with your question and a source URL, or mention {mention}: `research: why did the server close, and what role did this group play? https://forum.example/`.
+
+I search across related topics, spelling variants, pages and accounts before writing a detailed text report: direct answer, public actors, chronology, competing accounts, possible causes, the requested relationships, citations and gaps.
+Allegations are hypotheses to check. Participant accounts and tentative inferences stay separate; private motives are not invented.
+
+Default limits: up to 10 minutes, 48 forum page requests and 12 web searches. Progress is shown. If evidence is incomplete, I return the supported material and limits; I do not claim to read the whole archive.
+The slash command's `private` option hides the report from others. Each run uses one normal daily quota unit; external APIs are billed to the bot owner. Reply with my mention for follow-ups.""",
             "context": f"""**Commands and conversation**
 Mention {mention} with your question. Replying targets that message, including forwarded posts and available context.
 Reply to my result with my mention for a follow-up. Request text explicitly each time; otherwise a new explanation is a video.

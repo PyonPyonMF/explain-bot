@@ -20,6 +20,8 @@ def _request_words(text):
 
 def text_task(text):
     """Explicit transcript and summary requests are distinct from an ordinary explanation."""
+    if research_requested(text):
+        return "research"
     text = _request_words(text)
     command_start = r"(?:^|[.!?;:\n,])\s*(?:(?:пожалуйста|please|а|лучше|теперь)\s+)*"
     patterns = [
@@ -38,6 +40,22 @@ def text_task(text):
                 continue
             matches.append((match.start(), task))
     return max(matches)[1] if matches else "explain"
+
+
+def research_requested(text):
+    """Opt-in deep research, including a natural instruction to study a named forum."""
+    words = _request_words(text)
+    patterns = [r"(?:^|[.!?;:\n,])\s*(?:пожалуйста\s+|please\s+)?(?:deep\s+research|research|рисерч|ресерч|луркай|исследуй|расследуй)\b",
+                r"\b(?:сделай|проведи|хочу|нужен|нужно)\s+(?:мне\s+)?(?:глубокий\s+|подробный\s+)?(?:рисерч|ресерч|research|разбор\s+форума)\b",
+                r"\b(?:сделай|проведи|хочу|нужно)\s+(?:мне\s+)?(?:глубокое\s+|подробное\s+)?(?:исследование|расследование)\b"]
+    if re.search(r"https?://(?:[^/\s]*forums?\.|[^\s]*/forums?\b)|\bфорум\w*\b|\bforums?\.[\w.-]+", text, re.I):
+        patterns.append(r"\b(?:изучи|изучите|исследуй|расследуй|луркай|пролуркай|study|investigate)\b")
+    for pattern in patterns:
+        for match in re.finditer(pattern, words):
+            before = words[max(0, match.start()-50):match.start()]
+            if not re.search(r"\b(?:не|не надо|не нужно|не хочу|do not|don't|что значит|что означает)\s*$", before):
+                return True
+    return False
 
 
 def response_format(text):

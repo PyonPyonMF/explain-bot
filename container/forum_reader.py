@@ -62,6 +62,11 @@ def parse_page(raw, url):
         bookmark = block.select_one("a[rel='bookmark'], a[itemprop='replyToUrl']")
         link = canonical(bookmark.get("href"), url) if bookmark else url
         body = BeautifulSoup(str(body_node), "html.parser")
+        links = []
+        for anchor in body.select("a[href]"):
+            href = canonical(anchor.get("href"), url)
+            if href and urllib.parse.urlsplit(href).hostname == urllib.parse.urlsplit(url).hostname:
+                links.append({"url": href, "label": _text(anchor, 120)})
         quotes = []
         for quote in list(body.select("blockquote, div.blockquote")):
             if quote.parent is None:
@@ -76,7 +81,7 @@ def parse_page(raw, url):
         signature = _text(block.select_one(".signature"), 700)
         member_title = _text(block.select_one(".member_title"), 200)
         posts.append({"url": link, "author": author, "date": published, "text": _text(body, 4500),
-                      "quotes": quotes[:3], "current_signature": signature, "current_member_title": member_title})
+                      "quotes": quotes[:3], "links": links[:12], "current_signature": signature, "current_member_title": member_title})
     if posts:
         return {"kind": "forum_topic", "url": url, "title": title, "site_title": site_title, "sections": sections,
                 "posts": posts, "pages": _next(soup, url),
