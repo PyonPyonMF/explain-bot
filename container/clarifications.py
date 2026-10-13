@@ -96,9 +96,10 @@ def _clean(value):
 
 
 def create(state, job, owner, channel, request, why, origin="mention", prompt="", detail="", credit=False):
+    from conversation import excerpt
     key, now = uuid.uuid4().hex, time.time()
     record = {"job": _clean(job), "request": str(request)[:4000], "reason": why, "origin": origin,
-              "revision": 0, "picker_id": None, "prompt": str(prompt)[:280], "detail": str(detail)[:700], "quota_credit": bool(credit)}
+              "revision": 0, "picker_id": None, "prompt": excerpt(prompt, 280), "detail": excerpt(detail, 700), "quota_credit": bool(credit)}
     payload = json.dumps(record, ensure_ascii=False)
     if len(payload.encode()) > 2_000_000:
         raise ValueError("clarification snapshot exceeds limit")

@@ -67,8 +67,9 @@ def message_payload(message, depth=0):
         "id": str(message.id) if hasattr(message, "id") else None,
         "content": message.content,
         "timestamp": created.isoformat() if created else None,
-        "author": {"username": author.name if author else "forwarded post",
-                   "global_name": getattr(author, "global_name", None)},
+        "author": {"id": str(author.id) if getattr(author, "id", None) is not None else None,
+                   "username": author.name if author else "forwarded post", "global_name": getattr(author, "global_name", None),
+                   "display_name": getattr(author, "display_name", None)},
         "attachments": [a.to_dict() for a in message.attachments],
         "embeds": [e.to_dict() for e in message.embeds],
         "sticker_items": [{"id": str(st.id), "name": st.name, "format_type": st.format.value}

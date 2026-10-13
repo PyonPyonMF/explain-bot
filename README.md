@@ -117,6 +117,13 @@ Videos can use actual image references instead of drawing every object with geom
   If the requested entity/cause remains unresolved, the bot gives the supported part briefly and asks for the
   missing context with an edit/cancel card instead of rendering a video about the question itself. Clarifying
   the same request does not charge its quota twice. Explicit questions are not replaced by unrelated recent GIFs.
+- Questions about a chat reaction (including a reaction to another reply) use an explicit message/reply map,
+  keeping the target, ancestors and neighboring context separate. Available server nicknames and account aliases
+  are retained. These explanations interpret the supplied exchange without searching private participants or
+  their quotations. They keep the requested text/video format and use conversational animation rather than an
+  unrelated image walkthrough. Wording and interpretation are distinguished: unverified feelings, motives or
+  diagnostic labels do not become facts, and an unprovable side allegation does not block the supported answer.
+  Missing-source clarification previews end at sentence/word boundaries.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.

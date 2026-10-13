@@ -176,7 +176,7 @@ def trim_message(m, depth=0):
         return None
     return {
         "id": m.get("id"), "content": str(m.get("content") or "")[:MAX_TEXT], "timestamp": m.get("timestamp"),
-        "author": {"username": (m.get("author") or {}).get("username"), "global_name": (m.get("author") or {}).get("global_name")},
+        "author": {k: (m.get("author") or {}).get(k) for k in ("id", "username", "global_name", "display_name")},
         "attachments": [{k: a.get(k) for k in ("url", "proxy_url", "filename", "content_type", "size")}
                         for a in (m.get("attachments") or [])[:10]],
         "embeds": [{"type": e.get("type"), "title": e.get("title"), "description": (e.get("description") or "")[:1000],

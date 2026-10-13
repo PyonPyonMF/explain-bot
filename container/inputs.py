@@ -220,7 +220,7 @@ def _discord_get(path):
 
 def _author(m):
     a = m.get("author") or {}
-    return a.get("global_name") or a.get("username") or "?"
+    return a.get("display_name") or (m.get("member") or {}).get("nick") or a.get("global_name") or a.get("username") or "?"
 
 
 GIF_URL = re.compile(r"https?://(?:www\.)?(?:tenor\.com/(?:[a-z]{2}(?:-[A-Z]{2})?/)?view/|giphy\.com/gifs/"
@@ -406,6 +406,10 @@ def collect(job):
     if ctx_lines:
         ctx = "\n".join(ctx_lines)[-MAX_CONTEXT_CHARS:]
         texts.append(f"<conversation_before oldest_first=\"true\">\n{ctx}\n</conversation_before>")
+    from conversation import requested, graph
+    job["conversation_analysis"] = requested(job, texts) and not job["primary_document"] and not job["primary_x"]
+    if job["conversation_analysis"]:
+        texts.append(graph(job, msg if job.get("kind") == "message" else {}, parents, list(unique.values())))
 
     # 2. the target message itself
     if job.get("kind") == "message" and (document_source is None or document_source is msg):
