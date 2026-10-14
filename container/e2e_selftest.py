@@ -44,6 +44,8 @@ DEFAULT_SCENARIOS = [
     {"request": "помощь", "expect": "help"},
     # A meme command with a photo: the bot restores the picture through the Codex image worker.
     {"request": "джарвис enhance", "expect": "image", "attach": ["sample:picture"]},
+    # A new picture from a description: Codex ImageGen in "image" mode.
+    {"request": "нарисуй кота-космонавта в стиле советского плаката", "expect": "generated"},
     # An explanation of a photo becomes a portrait image walkthrough video.
     {"request": "объясни, что на этой картинке", "expect": "video", "attach": ["sample:picture"]},
 ]
@@ -58,7 +60,15 @@ with (home / "calls.jsonl").open("a") as log:
 out = Path(args[args.index("--output-last-message") + 1])
 images = [args[i + 1] for i, a in enumerate(args) if a == "--image"]
 result = {"image_path": "", "description": "e2e fake codex makes only enhancements", "references": []}
-if images and prompt.startswith("Restore and enhance"):
+if prompt.startswith("Create ONE finished standalone raster image"):
+    from PIL import ImageDraw
+    picture = Image.new("RGB", (1024, 1024), (180, 40, 40))
+    ImageDraw.Draw(picture).ellipse((312, 312, 712, 712), fill=(240, 220, 120))
+    (home / "generated_images").mkdir(exist_ok=True)
+    path = home / "generated_images" / (uuid.uuid4().hex + ".png")
+    picture.save(path)
+    result.update(image_path=str(path), description="e2e: a generated placeholder poster")
+elif images and prompt.startswith("Restore and enhance"):
     with Image.open(images[0]) as source:
         picture = source.convert("RGB")
     picture = picture.resize((picture.width * 2, picture.height * 2), Image.LANCZOS).filter(ImageFilter.UnsharpMask(2, 120, 2))
@@ -355,7 +365,7 @@ class World:
             entry["attachment_bytes"] = len(body)
             match = re.search(rb'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
             entry["content"] = json.loads(b'"' + match[1] + b'"') if match else ""
-            upload = re.search(rb'filename="[^"]+\.(mp4|png|jpg)"\r\nContent-Type: (?:video/mp4|image/png|image/jpeg)\r\n\r\n(.*)\r\n--[0-9a-f]+--',
+            upload = re.search(rb'filename="[^"]+\.(mp4|png|jpg)"\r\nContent-Type: (?:video/mp4|image/png|image/jpeg)\r\n\r\n(.*)\r\n--[\w-]+--',
                                body, re.S)
             if upload:
                 with self.lock:
@@ -501,7 +511,8 @@ def configure(world, live, data_dir, socket_path):
                            "TYPESAFE_BASE_URL": world.url, "TYPESAFE_API_KEY": "e2e-typesafe-key",
                            # Silent speech of a realistic length, so video timing and encoding run for real.
                            "ELEVENLABS_BASE_URL": world.url, "ELEVENLABS_API_KEY": "e2e-elevenlabs-key",
-                           "ELEVENLABS_VOICE_ID": "e2e-voice", "TTS_PROVIDER": "elevenlabs", "CODEX_IMAGES": "0"})
+                           "ELEVENLABS_VOICE_ID": "e2e-voice", "TTS_PROVIDER": "elevenlabs"})
+        os.environ.setdefault("CODEX_IMAGES", "0")  # start_codex_worker turns it on when the fake worker runs
         os.environ.pop("LOCAL_SPEECH_SOCKET", None)
     if socket_path:
         os.environ["TOOLS_EXECUTOR_SOCKET"] = socket_path
@@ -519,7 +530,7 @@ def start_codex_worker(data_dir):
     fake = Path(data_dir) / "codex"
     fake.write_text(f"#!{sys.executable}\n" + FAKE_CODEX)
     fake.chmod(0o755)
-    os.environ.update({"CODEX_BIN": str(fake), "CODEX_HOME": str(home), "CODEX_VISUAL_QUEUE": str(queue),
+    os.environ.update({"CODEX_BIN": str(fake), "CODEX_HOME": str(home), "CODEX_VISUAL_QUEUE": str(queue), "CODEX_IMAGES": "1",
                        "CODEX_VISUAL_UID": str(os.getuid()), "CODEX_VISUAL_GID": str(os.getgid()), "CODEX_VISUAL_TIMEOUT": "60"})
     sys.path.insert(0, str(scripts))
     import codex_visual_worker
@@ -587,6 +598,20 @@ def run_scenario(bot, world, scenario):
         refusal = re.search(r"^(?:⚠️|Не удалось|Не могу)|Попробуй (?:ещё раз|уточнить)|^(?:Could not|I can't)", final["content"].strip()) if final else None
         check("no failure message", final and not refusal and not any(f.split("\n")[0] in final["content"] for f in failures),
               final["content"][:200] if final else "")
+        if scenario.get("expect") == "generated":
+            uploads = [d for d in discord if (d.get("media_path") or "").endswith(".png")]
+            check("status says a picture is being generated", status and status["content"] == strings["image"],
+                  status["content"][:80] if status else "")
+            check("a generated picture was uploaded", uploads and "AI-изображение" in final["content"], final["content"][:120] if final else "")
+            calls_log = Path(os.environ.get("CODEX_HOME") or "/nonexistent") / "calls.jsonl"
+            if world.hermetic and calls_log.exists():
+                last = json.loads(calls_log.read_text().splitlines()[-1])
+                check("the image worker ran in generation mode", last["prompt"].startswith("Create ONE finished standalone"), last["prompt"][:80])
+            if uploads:
+                from PIL import Image
+                with Image.open(uploads[-1]["media_path"]) as produced:
+                    scenario["_media"] = {"path": uploads[-1]["media_path"], "width": produced.width, "height": produced.height,
+                                          "duration": 0, "frames": []}
         if scenario.get("expect") == "image":
             import image_enhance
             uploads = [d for d in discord if (d.get("media_path") or "").endswith((".png", ".jpg"))]
@@ -789,7 +814,7 @@ def show(result, records):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("requests", nargs="*", help="mention text without the bot mention")
-    parser.add_argument("--expect", choices=["text", "video", "image", "help", "clarify", "any"], default="any")
+    parser.add_argument("--expect", choices=["text", "video", "image", "generated", "help", "clarify", "any"], default="any")
     parser.add_argument("--live", action="store_true", help="real Messages API (and Jev if TYPESAFE_API_KEY is set)")
     parser.add_argument("--allow-video", action="store_true", help="also run requests that render a video")
     parser.add_argument("--json", action="store_true", help="print the raw observations as JSON")
@@ -832,10 +857,10 @@ def main(argv=None):
               + (f" — failed: {report['failed']}" if report["failed"] else ""))
     results, ok = [], all(r["passed"] == r["total"] for r in probe["tests"]) and not probe["invalid"]
     for scenario in scenarios:
-        if scenario.get("expect") == "image" and not args.live and codex_home is None:
+        if scenario.get("expect") in ("image", "generated") and not args.live and codex_home is None:
             print(f"\n━━ skipped «{scenario['request']}»: needs scripts/codex_visual_worker.py (or --live with the deployment's worker)")
             continue
-        if not args.live and not args.allow_video and scenario.get("expect") not in ("help", "video", "image") and \
+        if not args.live and not args.allow_video and scenario.get("expect") not in ("help", "video", "image", "generated") and \
                 response_format(scenario["request"]) == "video":
             print(f"\n━━ skipped «{scenario['request']}»: renders a video; use --live --allow-video")
             continue

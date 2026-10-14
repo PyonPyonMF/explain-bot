@@ -15,7 +15,7 @@ def _request_words(text):
     """Only the caller's own words can select an action or output format."""
     text = re.sub(r"```[\s\S]*?```|`[^`\n]*`|«[^»]*»|“[^”]*”|\"[^\"\n]*\"|(?<!\w)'[^'\n]*'(?!\w)", " ", text)
     text = re.sub(r"(?m)^\s*>.*$", " ", text).lower().replace("ё", "е")
-    return re.sub(r"https?://\S+", " ", text)
+    return re.sub(r"https?://\S+", " ", text).replace("сгенирируй", "сгенерируй")
 
 
 def text_task(text):
@@ -81,6 +81,9 @@ def response_format(text):
     fillers = r"(?:пожалуйста|мне|это|только|просто|коротко|подробнее|все|этот\s+(?:тред|пост|код|пример)|эту\s+статью)"
     text_format = r"(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)"
     patterns = [
+        ("image", r"\b(?:сгенерируй(?:те)?|создай(?:те)?|сделай(?:те)?)\s+(?:мне\s+|одну\s+|новую\s+|еще\s+|пожалуйста\s+)*(?:картинку|изображение|иллюстрацию|фото|рисунок|инфографику)\b"),
+        ("image", r"\b(?:нарисуй(?:те)?|draw)\b"),
+        ("image", r"\b(?:generate|create|make)\s+(?:me\s+|an?\s+|one\s+|new\s+)*(?:image|picture|illustration|photo|infographic)\b"),
         # The question can sit between the instruction and its format: "объясни что тут говорят текстом".
         ("text", rf"\b{verb}\b[^.!?;\n]{{0,600}}?\b(?P<requested_format>{text_format})\b(?=\s*(?:$|[,.!?;:\n]))"),
         ("text", rf"\b{verb}(?:[\s,]+{fillers})*[\s,]+(?:текстом|в\s+(?:виде|формате)\s+текста|в\s+текстовом\s+виде)\b"),

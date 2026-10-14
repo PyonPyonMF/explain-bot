@@ -328,6 +328,17 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("текстом", msg.reply.call_args.args[0])
         self.assertNotIn("видео", msg.reply.call_args.args[0])
 
+    async def test_image_request_acknowledges_image_and_preserves_replied_to_source(self):
+        target=message('Remove the magnetic track end cap.',mid=100)
+        ref=discord.MessageReference(message_id=100,channel_id=789);ref.resolved=target
+        msg=message('<@999> сгенерируй картинку',reference=ref)
+        await self.bot.on_message(msg)
+        job=self.submit.call_args.args[1]
+        self.assertEqual(job['response_format'],'image')
+        self.assertEqual(job['message']['content'],target.content)
+        self.assertIn('Codex ImageGen',msg.reply.call_args.args[0])
+        self.text_submit.assert_not_called()
+
     async def test_transcript_command_keeps_the_video_and_selects_text_worker(self):
         msg = message("<@999> Сделай транскрипцию видео текстом")
         msg.attachments = [SimpleNamespace(to_dict=lambda: {"filename": "clip.mp4", "content_type": "video/mp4",

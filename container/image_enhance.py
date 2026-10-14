@@ -93,7 +93,7 @@ def run(job, images, workdir):
     colorize = colorize_requested(job.get("question") or job.get("text") or "")
     P._safe_text(job, S["progress"])
     try:
-        data, result = assets.request_codex("", "", [photo], timeout=int(os.environ.get("IMAGE_ENHANCE_TIMEOUT") or 330),
+        data, result = assets.request_codex("", "", [photo], timeout=int(os.environ.get("IMAGE_ENHANCE_TIMEOUT") or 750),
                                             mode="enhance", options={"colorize": colorize})
     except (RuntimeError, TimeoutError, OSError, ValueError) as exc:
         log.warning("image enhancement unavailable: %s", type(exc).__name__)
@@ -105,4 +105,10 @@ def run(job, images, workdir):
     content = S["label"] + (" " + S["colorized"] if colorize else "")
     content += f"\n-# {photo['width']}×{photo['height']} → {width}×{height}"
     P.discord_file(job, out, "enhanced." + ("png" if kind == "image/png" else "jpg"), kind, content)
+    try:  # a follow-up ("а теперь раскрась") can refer to this answer
+        import followups
+        followups.record_image(job, f"Generatively enhanced version of the supplied photo ({width}x{height})")
+        followups.remember(job)
+    except Exception as exc:
+        log.warning("could not save image memory: %s", type(exc).__name__)
     log.info("image enhanced: %dx%d -> %dx%d colorize=%s", photo["width"], photo["height"], width, height, colorize)

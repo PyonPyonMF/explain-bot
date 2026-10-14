@@ -288,7 +288,7 @@ def find_web_images(queries, strategy, limit):
     return out
 
 
-def request_codex(prompt, query, references, timeout=225, mode="illustration", options=None):
+def request_codex(prompt, query, references, timeout=225, *, mode="illustration", source_context="", options=None):
     queue = Path(os.environ.get("CODEX_VISUAL_QUEUE") or "/visual-queue")
     if not queue.is_dir():
         raise RuntimeError("Codex image worker is unavailable")
@@ -306,7 +306,7 @@ def request_codex(prompt, query, references, timeout=225, mode="illustration", o
         names.append(name)
     temp = work / "request.tmp"
     temp.write_text(json.dumps({"prompt": prompt[:5000], "research_query": query[:200], "references": names, "mode": mode,
-                                "options": options or {}}, ensure_ascii=False))
+                                "source_context": source_context[:16000], "options": options or {}}, ensure_ascii=False))
     os.chmod(temp, 0o644)
     temp.replace(work / "request.json")
     deadline = time.monotonic() + timeout

@@ -2,6 +2,18 @@
 
 A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like style.
 
+- `@bot сгенерируй картинку <описание>` / `generate an image ...` / `нарисуй ...` returns a standalone PNG
+  through the existing private Codex worker's **built-in ImageGen** and ChatGPT login. Reply to a source or a
+  previous bot answer with `сгенерируй картинку` to illustrate that subject, including its retained references.
+  This route bypasses video planning, narration and rendering. The final image can include requested labels,
+  arrows, colors and composition; it does not inherit the no-label/dark-background video-asset template.
+  Only explicitly supplied/replied-to material supplies the subject. With no subject, the bot asks for it.
+  Generated output is identified as AI imagery, validated before upload and delivered within `MAX_UPLOAD_MB`;
+  PNG alpha is preserved. Errors do not silently turn the request into a video or a web-image substitute.
+  Image descriptions and original source context are retained for follow-ups. `CODEX_IMAGES=0` disables it.
+  `CODEX_IMAGE_TIMEOUT` caps standalone worker inference at 30–360 seconds (default 360); the bot allows queue
+  wait plus execution up to 750 seconds. Codex authentication stays on the host, outside the bot container.
+
 - `/help` (Russian UI: `/помощь`) shows a private feature overview with a `section` / «раздел» selector:
   text/transcripts/summaries, video/audio, files/links, commands/context, 3D/library and limits.
   In channel chat, mention the bot with `помощь`, `help`, `что ты умеешь` or a topic such as `помощь видео`.

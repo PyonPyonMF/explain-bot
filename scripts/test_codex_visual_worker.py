@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -8,6 +9,11 @@ import codex_visual_worker as worker
 
 
 class WorkerTests(unittest.TestCase):
+    def test_invalid_image_mode_is_rejected_before_running_codex(self):
+        with tempfile.TemporaryDirectory() as directory,patch.object(worker.subprocess,'Popen') as run:
+            work=Path(directory);(work/'request.json').write_text(json.dumps({'prompt':'cat','mode':'execute-shell'}))
+            with self.assertRaisesRegex(ValueError,'invalid image mode'):worker.run_job(work)
+        run.assert_not_called()
     def test_output_path_must_be_inside_generated_images(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -43,7 +49,7 @@ class EnhanceTests(unittest.TestCase):
             for references in ([], ["reference-0.jpg", "reference-1.jpg"]):
                 with self.subTest(references=references), self.assertRaisesRegex(ValueError, "exactly one photo"):
                     worker.run_job(self.job(Path(directory) / str(len(references)), references))
-            with self.assertRaisesRegex(ValueError, "unknown mode"):
+            with self.assertRaisesRegex(ValueError, "invalid image mode"):
                 worker.run_job(self.job(Path(directory) / "mode", ["reference-0.jpg"], mode="draw"))
 
     def test_enhance_prompt_preserves_the_picture(self):

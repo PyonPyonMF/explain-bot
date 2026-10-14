@@ -40,7 +40,7 @@ def reason(text, has_material=False):
     if has_material and words in ("разбери", "разбери это", "разбери видео", "посмотри", "посмотри это") and any(
             video_id(u.rstrip(".,;:!?)»")) or _x_match(u.rstrip(".,;:!?)»")) for u in re.findall(r"https?://[^\s<>]+", text)):
         return None
-    if mention_mode(text)[1] == "3d" or text_task(text) != "explain" or response_format(text) == "text":
+    if mention_mode(text)[1] == "3d" or text_task(text) != "explain" or response_format(text) in ("text","image"):
         return None
     if re.search(r"\b(?:сделай|сгенерируй|запиши)\s+(?:мне\s+)?(?:видео|ролик)\b|\bлучше\s+видео\b", words):
         return None
