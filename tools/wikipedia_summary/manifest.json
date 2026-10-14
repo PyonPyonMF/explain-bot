@@ -1,0 +1,24 @@
+{
+  "api": 1,
+  "id": "wikipedia_summary",
+  "title": "Wikipedia article summary",
+  "description": "Reads the lead summary of one Wikipedia article in Russian or English by its exact title: the canonical title, a short description, the lead extract and the article URL. Reports disambiguation pages and missing articles instead of guessing. Use it for a quick, citable definition of a well-known subject.",
+  "when_not_to_use": "Recent events, niche community or gaming subjects that Wikipedia does not cover, opinions, private people, and questions that need more than the article's lead section.",
+  "examples": [
+    "что такое градиентный спуск?",
+    "кто такой Леонард Эйлер?",
+    "what is a Turing machine?"
+  ],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "title": {"type": "string", "minLength": 1, "maxLength": 200, "description": "exact article title"},
+      "language": {"type": "string", "enum": ["ru", "en"]}
+    },
+    "required": ["title", "language"],
+    "additionalProperties": false
+  },
+  "output_description": "title, description, extract (lead text, at most 1500 characters), url, and disambiguation (true when the title names several subjects).",
+  "network": ["ru.wikipedia.org", "en.wikipedia.org"],
+  "limits": {"timeout_s": 15, "max_fetches": 2, "max_fetch_kb": 256, "memory_mb": 256, "max_output_chars": 3000}
+}

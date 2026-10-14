@@ -7,14 +7,20 @@ services:
     restart: unless-stopped
     depends_on:
       - pot
+      - tools
     env_file: .env
     environment:
       DATA_DIR: /data
       CODE_VERSION: ${CODE_VERSION:-gateway}
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
       YOUTUBE_POT_URL: http://pot:4416
+      TOOLS_DIR: /tools
+      TOOLS_EXECUTOR_SOCKET: /tool-socket/executor.sock
     volumes:
       - ./data:/data
+      # Tool library from this checkout: a merged tool appears after `git pull`, without a rebuild or restart.
+      - ./tools:/tools:ro
+      - tool-socket:/tool-socket
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
       - ./models3d:/models3d:ro
       - ./library3d:/library3d
@@ -25,6 +31,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  # Runs library tools: no network, no credentials (env_file is deliberately absent), no data volumes.
+  # The bot brokers every fetch a tool makes, limited to the hosts in its manifest.
+  tools:
+    build: ./container
+    command: ["python", "tool_executor.py"]
+    restart: unless-stopped
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 64
+    cpus: 1
+    environment:
+      TOOLS_EXECUTOR_SOCKET: /tool-socket/executor.sock
+      TOOLS_EXECUTOR_CONCURRENCY: "2"
+    volumes:
+      - tool-socket:/tool-socket
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
   pot:
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     restart: unless-stopped
@@ -38,3 +70,5 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+volumes:
+  tool-socket:

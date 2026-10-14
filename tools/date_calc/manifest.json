@@ -1,0 +1,29 @@
+{
+  "api": 1,
+  "id": "date_calc",
+  "title": "Calendar calculations",
+  "description": "Exact calendar arithmetic on Gregorian dates: the number of days between two dates (with a years/months/days breakdown and weekday count), the date N days before or after a date, and the weekday, ISO week and day of the year of a date. Use it instead of mental arithmetic whenever an answer depends on exact date math.",
+  "when_not_to_use": "Time zones, clock times, historical calendars (Julian), holidays or business-day calendars of a specific country, and questions about what happened on a date.",
+  "examples": [
+    "сколько дней до нового года?",
+    "какой день недели будет 12 марта 2031?",
+    "какая дата будет через 90 дней после 2026-10-14?",
+    "сколько лет, месяцев и дней прошло с 1998-07-20 по 2026-10-14?"
+  ],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "operation": {"type": "string", "enum": ["between", "shift", "describe"],
+                    "description": "between: date → other_date; shift: date + days; describe: facts about date"},
+      "date": {"type": "string", "minLength": 10, "maxLength": 10, "description": "YYYY-MM-DD"},
+      "other_date": {"type": "string", "minLength": 10, "maxLength": 10, "description": "YYYY-MM-DD, for between"},
+      "days": {"type": "integer", "minimum": -3650000, "maximum": 3650000, "description": "for shift; negative goes back"},
+      "language": {"type": "string", "enum": ["ru", "en"]}
+    },
+    "required": ["operation", "date"],
+    "additionalProperties": false
+  },
+  "output_description": "between: days (signed), weeks, years/months/days breakdown, weekdays (Mon-Fri) count; shift: result date and weekday; describe: weekday, ISO week, day of year, leap year, days left in the year.",
+  "network": [],
+  "limits": {"timeout_s": 5, "memory_mb": 128, "max_output_chars": 2000}
+}

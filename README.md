@@ -286,6 +286,44 @@ cost. `THREED_FPS`, `THREED_WIDTH`, `THREED_HEIGHT`, `THREED_SAMPLES`, `THREED_M
 failure is reported as a failure; it is not silently replaced by a 2D clip. Generated Blender code runs as
 the unprivileged sandbox user with API credentials removed, with auto-execution from model files disabled.
 
+### Tool library (self-extending capabilities)
+
+The bot keeps a library of small, single-purpose tools in `tools/<id>/`. A tool is data plus one sandboxed
+function, so a newly merged tool becomes available after `git pull` on the server, without rebuilding the image
+or restarting the bot (the registry rescans every `TOOLS_RESCAN` seconds, default 30).
+
+```
+tools/date_calc/manifest.json   id, description and examples (for routing), input_schema, network hosts, limits
+tools/date_calc/tool.py         def run(args, ctx) -> dict
+tools/date_calc/tests.json      declarative cases: args, network fixtures, expected output paths or errors
+```
+
+- **Isolation.** Tool code never runs in the bot process. In Compose it runs in the separate `tools` service:
+  no network (`network_mode: none`), no credentials (it refuses to start if any `*_KEY`/`*_TOKEN`/`*_SECRET` is
+  set), no data volumes, a read-only filesystem, no capabilities, as the unprivileged `sandbox` user. Each call
+  lowers its own limits before tool code loads: memory, CPU time, file size, open files, and no child processes.
+  The bot sends the exact source it registered (a later edit on disk cannot change a running version) and the
+  validated arguments; tool output is untrusted data.
+- **Network through a broker.** `ctx.fetch(url)` is performed by the bot: plain `https` only, only hosts declared
+  in the manifest (`*.domain` allowed), public addresses only (redirects included), bounded count, size and time.
+- **Bounded inputs.** `input_schema` is a strict JSON Schema subset that also works as a Claude tool definition:
+  every object closes `additionalProperties`, every string has `maxLength` or `enum`, every array `maxItems`;
+  `pattern` is rejected so an untrusted regular expression is never evaluated by the trusted process.
+- **Versions and trust.** Each distinct content digest is a version with its own state in `/data/tools.sqlite`:
+  `probation` (new), `stable`, `suspended`, `archived`, `superseded`. A changed tool starts again in probation and
+  never inherits its predecessor's statistics. Calls are counted as `ok`, `declined` (an expected failure the
+  tool reported with `ctx.fail`) or `failed` (crash, timeout, protocol or limit violation).
+- **Tests are data.** `tests.json` cases run the tool in the sandbox with fixture responses instead of the
+  network; the trusted process checks the expectations, so no generated test code is executed.
+
+Operator commands (`docker compose -f compose.gateway.yml exec bot python -m tool_registry …`): `list`,
+`show <id>`, `test <id>`, `run <id> '<json args>'`, `promote <id>` (stable), `suspend <id>`, `archive <id>`,
+`restore <id>`, and `check <dir>…` (validates directories without a database, for review/CI).
+
+For local development without the `tools` service, `TOOLS_LOCAL_SANDBOX=1` runs calls as the `sandbox` user in
+the bot container instead; that mode has no network boundary and is not meant for production. Without either
+the executor socket or that switch, tools are unavailable. Cloudflare Containers mode does not load tools.
+
 ### Optional Windows GPU worker
 
 With `THREED_REMOTE=1`, an available personal computer renders 1080p Eevee scenes with 32 samples, soft

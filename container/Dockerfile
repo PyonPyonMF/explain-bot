@@ -27,8 +27,10 @@ COPY requirements-youtube.txt ./
 RUN pip install --no-cache-dir -r requirements-youtube.txt
 COPY speech_backend.py ./
 
-COPY plan.py scenes.py pipeline.py inputs.py pdf_inputs.py links.py speech.py youtube.py x_media.py assets.py research.py deep_research.py forum_reader.py conversation.py server.py kit.py gen_harness.py fullgen.py interactions.py gateway.py bot_help.py clarifications.py followups.py text_answers.py image_story.py prompt_cache.py render_modes.py three_d.py three_d_kit.py three_d_runtime.py three_d_library_export.py object_library.py remote_render.py commands.json ./
+COPY plan.py scenes.py pipeline.py inputs.py pdf_inputs.py links.py speech.py youtube.py x_media.py assets.py research.py deep_research.py forum_reader.py conversation.py server.py kit.py gen_harness.py fullgen.py interactions.py gateway.py bot_help.py clarifications.py followups.py text_answers.py image_story.py prompt_cache.py render_modes.py three_d.py three_d_kit.py three_d_runtime.py three_d_library_export.py object_library.py remote_render.py tool_registry.py tool_runtime.py tool_harness.py tool_executor.py commands.json ./
 RUN chmod -R a+rX /app
+# The isolated tool executor (tool_executor.py) creates its socket here; a named volume inherits this owner.
+RUN mkdir -p /tool-socket && chown sandbox:sandbox /tool-socket
 
 EXPOSE 8080
 CMD ["python", "server.py"]
