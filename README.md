@@ -92,7 +92,8 @@ Videos can use actual image references instead of drawing every object with geom
   (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,
   describing each one for the scene writer.
 - Before the script is written, Sonnet checks the facts the explanation relies on with Anthropic's server-side
-  web search (`web_search` / `web_fetch` tools, same API key), before visual preparation. Up to six
+  web search (`web_search` / `web_fetch` tools, same API key) and the library tools (see "Tool library"),
+  before visual preparation. Up to six
   findings reach the script with their sources; a finding is dropped unless its URL actually came back from
   the search tools. The sources are listed under the video. `WEB_RESEARCH=0` turns this off;
   `RESEARCH_MAX_SEARCHES` caps the billed searches per video. Web search must be allowed for the organization
@@ -315,6 +316,24 @@ tools/date_calc/tests.json      declarative cases: args, network fixtures, expec
   tool reported with `ctx.fail`) or `failed` (crash, timeout, protocol or limit violation).
 - **Tests are data.** `tests.json` cases run the tool in the sandbox with fixture responses instead of the
   network; the trusted process checks the expectations, so no generated test code is executed.
+- **Answers use the tools.** The research step that runs before every text explanation and video script offers
+  the active tools as client tools next to web search and the forum tools, sorted by id: the manifest
+  description, its "Not for:" text, a note that the output is untrusted, and the input schema without the bounds
+  the Messages API does not take for tools (`minLength`, `maximum`, `default`, … move into the property
+  descriptions; the runtime still validates the full schema). Above `TOOLS_DEFER_AFTER` (default 8) active tools
+  their definitions are deferred behind the server-side tool search tool (BM25); web and forum tools always stay
+  loaded. Calls run through the executor, at most four client operations per step and only while the research
+  deadline leaves room; rejected arguments return the problems as an error the model can correct. Up to six
+  successful outputs reach the script or text answer as `<tool_result tool="…" version="…">` data blocks with a
+  rule to prefer them over memory for exact values; they are never put in a system prompt or logged. An answer
+  that used a tool still in probation says so in a `-# 🧪` line under the answer or the video.
+- **Automatic lifecycle.** Each recorded call re-evaluates its version. Probation becomes `stable` after
+  `TOOLS_PROMOTE_AFTER` (default 20) calls of which at least 95% were `ok` or `declined`. Probation or stable
+  becomes `suspended` after `TOOLS_SUSPEND_AFTER_FAILURES` (default 3) consecutive failures, or when more than
+  30% of at least 5 calls failed. Only a failure can suspend and only a success can promote; `0` turns the
+  promotion or the streak rule off. Status changes are logged with the tool id and digest only. Operator
+  `promote`/`restore` still apply; they start a new failure streak but keep the totals, so a restored version
+  whose failure ratio is still above 30% is suspended again by its next failure.
 
 Operator commands (`docker compose -f compose.gateway.yml exec bot python -m tool_registry …`): `list`,
 `show <id>`, `test <id>`, `run <id> '<json args>'`, `promote <id>` (stable), `suspend <id>`, `archive <id>`,

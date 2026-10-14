@@ -7,6 +7,7 @@ so a merged tool appears without a rebuild or restart, and a changed tool never 
 import argparse
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ import sqlite3
 import threading
 import time
 
+log = logging.getLogger("tools")
 API = 1
 ID_RE = re.compile(r"[a-z][a-z0-9_]{2,39}")
 HOST_RE = re.compile(r"(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
@@ -221,7 +223,10 @@ class Registry:
             digest TEXT PRIMARY KEY, id TEXT NOT NULL, manifest TEXT NOT NULL, discovered REAL NOT NULL,
             status TEXT NOT NULL, uses INTEGER NOT NULL DEFAULT 0, ok INTEGER NOT NULL DEFAULT 0,
             declined INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
-            last_used REAL, last_error TEXT, status_changed REAL)""")
+            last_used REAL, last_error TEXT, status_changed REAL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0)""")
+        if "consecutive_failures" not in {row[1] for row in conn.execute("PRAGMA table_info(tool_versions)")}:
+            conn.execute("ALTER TABLE tool_versions ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0")
         conn.commit()
         if os.name == "posix":
             os.chmod(self.db_path, 0o600)  # Usage history is bot state, not readable by sandboxed code.
@@ -287,7 +292,8 @@ class Registry:
             return False
         conn = self._db()
         try:
-            cursor = conn.execute("UPDATE tool_versions SET status=?, status_changed=? WHERE digest=?",
+            # An operator's decision starts a new failure streak; the totals stay as the version's record.
+            cursor = conn.execute("UPDATE tool_versions SET status=?, status_changed=?, consecutive_failures=0 WHERE digest=?",
                                   (status, time.time(), entry["digest"]))
             conn.commit()
             return cursor.rowcount > 0
@@ -295,17 +301,49 @@ class Registry:
             conn.close()
 
     def record(self, digest, outcome, error=""):
-        """outcome: ok (answered), declined (the tool reported an expected failure), failed (crash/timeout/violation)."""
+        """outcome: ok (answered), declined (the tool reported an expected failure), failed (crash/timeout/violation).
+
+        The lifecycle policy is applied to this version in the same transaction; returns its new status or None.
+        """
         if outcome not in ("ok", "declined", "failed"):
             raise ValueError("unknown outcome")
         conn = self._db()
+        change = None
         try:
             conn.execute(f"UPDATE tool_versions SET uses=uses+1, {outcome}={outcome}+1, last_used=?, "
-                         "last_error=CASE WHEN ?='failed' THEN ? ELSE last_error END WHERE digest=?",
-                         (time.time(), outcome, str(error)[:300], digest))
+                         "last_error=CASE WHEN ?='failed' THEN ? ELSE last_error END, "
+                         "consecutive_failures=CASE WHEN ?='failed' THEN consecutive_failures+1 ELSE 0 END WHERE digest=?",
+                         (time.time(), outcome, str(error)[:300], outcome, digest))
+            row = conn.execute("SELECT * FROM tool_versions WHERE digest=?", (digest,)).fetchone()
+            change = lifecycle(dict(row), outcome) if row else None
+            if change:
+                conn.execute("UPDATE tool_versions SET status=?, status_changed=? WHERE digest=?", (change[0], time.time(), digest))
             conn.commit()
         finally:
             conn.close()
+        if not change:
+            return None
+        (log.warning if change[0] == "suspended" else log.info)("tool %s %s %s", row["id"], digest[:12], change[1])
+        return change[0]
+
+
+def lifecycle(row, outcome):
+    """(status, reason) a version earns with this call, or None. Only a failure can suspend and only a success can
+    promote, so an operator's restore is not undone by the next good call."""
+    if row["status"] not in ACTIVE:
+        return None
+    uses, failed = row["uses"], row["failed"]
+    if outcome == "failed":
+        streak = int(os.environ.get("TOOLS_SUSPEND_AFTER_FAILURES") or 3)
+        if streak and row["consecutive_failures"] >= streak:
+            return "suspended", f"suspended after {row['consecutive_failures']} consecutive failures"
+        if uses >= 5 and failed > 0.3 * uses:
+            return "suspended", f"suspended after {failed} of {uses} calls failed"
+    elif row["status"] == "probation":
+        promote_after = int(os.environ.get("TOOLS_PROMOTE_AFTER") or 20)
+        if promote_after and uses >= promote_after and row["ok"] + row["declined"] >= 0.95 * uses:
+            return "stable", f"promoted to stable after {uses} calls"
+    return None
 
 
 _registry = None
