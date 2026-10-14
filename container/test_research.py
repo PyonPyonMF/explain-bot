@@ -105,6 +105,42 @@ class ResearchTests(unittest.TestCase):
         for required in (None,True,'false'):
             self.assertTrue(research.blocks_answer({'status':'partial','direct_answer':'Some context','clarification_required':required}))
 
+    def test_unsearched_phrase_comparison_is_reconsidered_with_lookup_before_clarification(self):
+        first={"answer_status":"ambiguous","direct_answer":"No gaming context supplied.","clarification_question":"Which server?"}
+        final={"answer_status":"ready","direct_answer":"These expressions describe opposite sides of a parent-child relationship.",
+               "clarification_required":False,"evidence_urls":["https://grep.ai/blog/agentrun"],"findings":[]}
+        replies=[response([{"type":"text","text":json.dumps(first)}]),
+                 response([{"type":"server_tool_use","id":"lookup","name":"web_search"},SEARCH,
+                           {"type":"text","text":json.dumps(final)}])]
+        job={"kind":"query","text":"dad girls vs girl dads"}
+        with patch.object(pipeline,"_http",side_effect=replies) as http:
+            research.web_research(job,[],[])
+        self.assertEqual(http.call_count,2)
+        retry=json.loads(http.call_args_list[1].args[1])['messages'][-1]['content']
+        self.assertIn('perform an actual lookup',retry)
+        self.assertIn('Do not search incidental participants',retry)
+        self.assertEqual(job['research_assessment']['status'],'ready')
+        self.assertTrue(job['research_assessment']['unsearched_retry'])
+        self.assertEqual(job['research_assessment']['tool_calls'],1)
+        self.assertFalse(pipeline.request_missing_context(job))
+
+    def test_known_ordinary_comparison_can_answer_without_forced_external_lookup(self):
+        final={"answer_status":"not_needed","direct_answer":"A comparison of ordinary grammar terms.","clarification_required":False,"findings":[]}
+        with patch.object(pipeline,"_http",return_value=response([{"type":"text","text":json.dumps(final)}])) as http:
+            job={"kind":"query","text":"subject vs object in grammar"}
+            research.web_research(job,[],[])
+        self.assertEqual(http.call_count,1)
+        self.assertEqual(job['research_assessment']['status'],'not_needed')
+        self.assertFalse(pipeline.request_missing_context(job))
+
+    def test_failed_reconsideration_remains_bounded_and_does_not_launch_generation(self):
+        final={"answer_status":"ambiguous","direct_answer":"","clarification_required":True,"clarification_question":"Which document?"}
+        with patch.object(pipeline,"_http",return_value=response([{"type":"text","text":json.dumps(final)}])) as http:
+            job={"kind":"query","text":"compare those things"}
+            research.web_research(job,[],[])
+        self.assertEqual(http.call_count,2)
+        self.assertTrue(research.blocks_answer(job['research_assessment']))
+
 
 if __name__ == "__main__":
     unittest.main()

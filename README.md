@@ -42,6 +42,10 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   Ordinary commands such as `дай рецепт текстом`, `опиши картинку текстом` and `составь план текстом` work too.
   Optional provenance or a more exact variant does not block a useful answer to the actual request: for example,
   a suggested recipe from a food image does not require an episode number unless the user asks for the exact original.
+  Bare topics and `A vs B` normally request an explanation or comparison of meanings and differences. Unrelated
+  recent chat does not turn ordinary expressions into unidentified game factions or require a server name.
+  An unsearched `ambiguous`/`not_found` assessment gets one bounded reconsideration before asking for context;
+  unfamiliar public terms can be looked up, while genuinely missing source details still require clarification.
   The explicit bot mention is still required. Long text is delivered in multiple messages without cutting
   off the answer. Replies to any part retain the same context. Each new request selects its own format:
   without an explicit text request, the bot makes a video again. Text requests have a separate worker so

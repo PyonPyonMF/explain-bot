@@ -172,10 +172,15 @@ def build_user_content(job, images, texts):
             parts.append(f"<question>\n{job['question']}\n</question>")
     else:
         parts.append(f"Answer the user's CURRENT question directly. The request is an instruction to answer, not a post to describe.\n<request>\n{job['text']}\n</request>")
-    parts.append("Keep the requested subject and community. Context can disambiguate names, but unrelated chat, GIFs and famous "
-                 "namesakes must not replace the question. Lead with the actual answer; do not narrate the user's act of asking, "
-                 "define words from the question, or fill missing facts with generic background. If the central answer is unknown, "
-                 "say what remains unknown briefly instead of making a long explanation of why the question is hard.")
+    parts.append("Keep the requested subject. Use community/domain context only when the CURRENT request actually points to it; "
+                 "unrelated recent chat, GIFs and famous namesakes must not replace the question. A bare topic is a request to "
+                 "explain it, and 'A vs B' ordinarily asks for meanings and differences, not a winner or a dispute. "
+                 "For ordinary expressions, slang or a language comparison, explaining their meanings IS the actual answer. "
+                 "Do not assume the words name players, factions or a meme merely because this is a Discord chat. "
+                 "For a specific named entity, definitions of neighboring words or a more famous namesake are not an answer. "
+                 "Lead with the actual answer and state any necessary interpretation briefly. Do not narrate the user's act of "
+                 "asking or fill missing facts with generic background. If the central answer is unknown, say what remains "
+                 "unknown briefly instead of making a long explanation of why the question is hard.")
     if job.get("research_video"):
         from deep_research import VIDEO_RULE
         parts += ["<research_dossier>\n" + job["deep_research_report"] + "\n</research_dossier>", VIDEO_RULE]

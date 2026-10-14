@@ -16,7 +16,19 @@ log = logging.getLogger("research")
 
 MAX_FINDINGS = 6
 PROMPT = """Research the user's CURRENT question and determine whether it can actually be answered.
-Answer the question, not the wording of the question or a vaguely related topic. For obscure entities, public
+First determine the kind of request: an ordinary concept/expression, a comparison, supplied material, or a specific
+named entity/event. A bare topic requests an explanation. 'A vs B' normally requests meanings and differences;
+do not turn it into a demand to pick a winner or take sides unless the user asked that. For ordinary expressions,
+slang and word-order comparisons, explain their meanings and usage: those definitions ARE the actual answer.
+Consider spelling, plurals, possessives and familiar variants when a phrase is unusual. Distinguish a supported
+definition from a likely interpretation of a nonstandard phrase; state the interpretation without pretending
+it is an established term. A brief useful comparison under that interpretation does not require another turn.
+Do not invent a gaming/server/community setting from unrelated recent Discord chat. Only apply a domain clue
+when the current request, its replied-to source or clearly relevant context actually ties the subject to it.
+If the phrase is unfamiliar, look up the exact public terms and reasonable variants before calling the request
+ambiguous. A missing link is not itself a reason to stop. Ask for a source only when different plausible meanings
+would materially change the requested answer and a useful bounded interpretation cannot be established.
+Answer the actual question, not a vaguely related topic. For obscure entities, public
 gaming/community handles, groups and events, search before concluding that you do not know. Search the exact
 names TOGETHER with community/domain clues from the request and relevant context. Do not replace a niche entity
 with a more famous namesake. For example, a game-server community and a fictional machine with the same name
@@ -160,9 +172,23 @@ def ask(images, context, source_urls=(), require_lookup=False, stats=None):
                 results.append({"type": "tool_result", "tool_use_id": call["id"], "content": json.dumps(found, ensure_ascii=False), "is_error": error})
             messages += [{"role": "assistant", "content": content}, {"role": "user", "content": results}]
             continue
-        if require_lookup and not lookup_ids and turn == 0 and time.monotonic() < deadline:
+        unresolved = False
+        if not lookup_ids and turn == 0:
+            try:
+                unresolved = P.parse_json_reply(text).get("answer_status") in ("ambiguous", "not_found")
+            except Exception:
+                pass
+        if (require_lookup or unresolved) and not lookup_ids and turn == 0 and time.monotonic() < deadline:
+            stats["unsearched_retry"] = True
             messages += [{"role": "assistant", "content": content}, {"role": "user", "content":
-                "This question requires an actual public lookup. Search the exact requested entities together; use the specified forum/domain if given. Do not stop at a guess or an unsearched claim of no information."}]
+                "Before asking for more context, reassess the CURRENT request as an ordinary phrase, concept or comparison. "
+                "'A vs B' normally asks for meanings and differences, not which side is better. Explain a supported common "
+                "meaning with a short interpretation caveat where appropriate. If identifiable public terms remain unfamiliar, "
+                "perform an actual lookup of those terms and reasonable spelling/word-order variants; use an explicitly "
+                "specified forum/domain when relevant. Do not assume a server, game or community from unrelated chat. "
+                "Do not search incidental participants, private quotations or personal details. If no identifiable public "
+                "subject was supplied, ask only for the genuinely necessary detail. Do not stop at a guess or an unsearched "
+                "claim of no information."}]
             continue
         if stop != "pause_turn" or time.monotonic() > deadline:
             break
