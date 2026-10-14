@@ -234,6 +234,9 @@ def handle(i, enqueue):
     if t in (MESSAGE_COMPONENT, MODAL_SUBMIT) and str(d.get("custom_id") or "").startswith("clarify:"):
         from clarifications import handle as clarify
         return clarify(i, enqueue, state())
+    if t == MESSAGE_COMPONENT and str(d.get("custom_id") or "").startswith("forge:"):
+        from forge_queue import handle as forge
+        return forge(i)
     if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "help":
         from bot_help import help_text
         return _reply({"type": CHANNEL_MESSAGE, "data": {

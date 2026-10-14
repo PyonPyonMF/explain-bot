@@ -1,0 +1,29 @@
+[Unit]
+Description=Explain Bot tool forge (builds approved tools and opens pull requests)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A dedicated account: its home holds only the Claude Code login, and it needs docker to run the gates.
+User=forge
+Group=forge
+SupplementaryGroups=docker
+Environment=FORGE_QUEUE=/var/lib/explain-bot-forge/queue
+Environment=FORGE_REPO=/var/lib/explain-bot-forge/repo
+Environment=FORGE_TEST_IMAGE=explain-bot-bot
+Environment=CLAUDE_BIN=/usr/local/bin/claude
+# FORGE_GITHUB_REPO=owner/repo and FORGE_GITHUB_TOKEN (contents + pull requests on this repository only).
+EnvironmentFile=/etc/explain-bot-forge.env
+ExecStart=/usr/bin/python3 /opt/explain-bot/scripts/tool_forge.py
+Restart=on-failure
+RestartSec=30
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/explain-bot-forge /home/forge
+PrivateTmp=true
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

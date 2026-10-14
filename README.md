@@ -346,6 +346,38 @@ grouped into a backlog of reusable tool specifications that the tool forge will 
   an operator must review it. `python -m router backlog` lists missing capabilities by demand with their latest
   specification; `python -m router decisions [--show-requests]` lists recent decisions.
 
+### Tool forge (the bot builds its missing tools)
+
+The router's backlog drives a forge that writes new library tools, with a person approving and reviewing:
+
+1. **Demand.** When a missing capability has been requested `FORGE_MIN_REQUESTS` times (default 2) in 30 days,
+   the bot sends `FORGE_OWNER_ID` a direct message with the specification (never the users' requests) and
+   **Build** / **Ignore** buttons. Only the owner can decide; each card is decided once.
+2. **Build.** Build writes the specification to the forge queue. `scripts/tool_forge.py` (host service
+   `deploy/explain-bot-forge.service`) takes a fresh git worktree and runs Claude Code headless as the builder:
+   `--restricted`, `--permission-mode dontAsk`, file tools confined to the worktree, web search/fetch for API
+   documentation, and **no shell** — prefix-matched Bash rules are not a security boundary.
+3. **Gates.** The forge, not the builder, runs `container/tool_gates.py` in the bot image with `--network none`:
+   manifest contract; code rules (allow-listed imports only; no `open`/`eval`/`exec`/`getattr`, dunder attributes,
+   format-string attribute access or global state); scope (network hosts within the specification, a new id, and
+   files under `tools/<id>/` only); at least 4 own test cases including an expected failure; and **hidden tests**
+   written by a second, separate Claude Code run that sees the specification, the manifest and the builder's tests as
+   a format reference, never the code. Failures go back to the builder for up to `FORGE_REPAIR_ROUNDS` (3) rounds.
+   These rules are defense in depth; the sandbox, the executor without network and the broker remain the boundary.
+4. **Pull request.** A passing tool is pushed to `tools/<id>` and opened as a pull request with the
+   specification, gate results and a review checklist; the owner's card links it. The GitHub token is used only by
+   the forge process and never reaches the builders. After a human merges it, `git pull` on the server loads the
+   tool in probation without a rebuild or restart.
+
+Setup on the server: create a `forge` account in the `docker` group and log it into Claude Code (or set
+`FORGE_ANTHROPIC_API_KEY`); clone the repository to `/var/lib/explain-bot-forge/repo`; create
+`/var/lib/explain-bot-forge/queue` owned by `forge` and set `FORGE_UID`/`FORGE_GID` to its ids; put
+`FORGE_GITHUB_REPO=owner/repo` and a fine-grained `FORGE_GITHUB_TOKEN` (contents and pull requests on this repository
+only) in `/etc/explain-bot-forge.env` (mode 0600); install the unit. `FORGE_BUDGET_USD` (default 5) caps each Claude
+Code run, `FORGE_TIMEOUT` (1800 s) bounds it, `FORGE_MODEL` selects its model. Operators can queue a backlog entry
+without the card (`python -m forge_queue propose <capability>`), list proposals (`list`) and gate any tool directory
+(`python3 scripts/tool_forge.py test tools/<id>`).
+
 ### Optional Windows GPU worker
 
 With `THREED_REMOTE=1`, an available personal computer renders 1080p Eevee scenes with 32 samples, soft

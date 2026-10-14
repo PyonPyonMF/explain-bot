@@ -22,6 +22,11 @@ python e2e_selftest.py "объясни текстом, <something the change aff
 - On the server, `docker compose -f compose.gateway.yml exec bot python e2e_selftest.py --live "..."` uses the
   real Messages API (Discord stays fake, so nothing is posted).
 
+## Tools in tools/
+
+A new or changed tool must pass `cd container && python -m tool_gates ../tools/<id> --existing ../tools` (manifest,
+code rules, its declarative tests in the sandbox). The tool forge applies the same gates plus hidden tests.
+
 ## Conventions
 
 - External APIs are called with stdlib `urllib` (see `pipeline._http`), not vendor SDKs; keep the image small.

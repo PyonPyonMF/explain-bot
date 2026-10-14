@@ -1,0 +1,8 @@
+[
+  {"name": "feet to metres", "args": {"value": 10, "from_unit": "ft", "to_unit": "m"}, "expect": {"value": 3.048}},
+  {"name": "miles to km", "args": {"value": 3, "from_unit": "mi", "to_unit": "km"}, "expect": {"value": 4.828032}},
+  {"name": "inches to cm", "args": {"value": 12, "from_unit": "in", "to_unit": "cm"}, "expect": {"value": 30.48}},
+  {"name": "same unit", "args": {"value": 7, "from_unit": "km", "to_unit": "km"}, "expect": {"value": 7}},
+  {"name": "negative is declined", "args": {"value": -3, "from_unit": "m", "to_unit": "km"}, "expect_error": "negative"},
+  {"name": "unknown unit is rejected", "args": {"value": 3, "from_unit": "yard", "to_unit": "m"}, "expect_error": "one of"}
+]

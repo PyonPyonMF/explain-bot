@@ -19,11 +19,14 @@ services:
       YOUTUBE_POT_URL: http://pot:4416
       TOOLS_DIR: /tools
       TOOLS_EXECUTOR_SOCKET: /tool-socket/executor.sock
+      FORGE_QUEUE: /forge-queue
     volumes:
       - ./data:/data
       # Tool library from this checkout: a merged tool appears after `git pull`, without a rebuild or restart.
       - ./tools:/tools:ro
       - tool-socket:/tool-socket
+      # Approved capability specifications for the host-side tool forge (scripts/tool_forge.py).
+      - ${FORGE_QUEUE_HOST:-/var/lib/explain-bot-forge/queue}:/forge-queue
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
       - ./models3d:/models3d:ro
       - ./library3d:/library3d

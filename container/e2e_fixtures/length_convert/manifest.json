@@ -1,0 +1,20 @@
+{
+  "api": 1,
+  "id": "length_convert",
+  "title": "Length conversion",
+  "description": "Converts a length exactly between metres, kilometres, centimetres, inches, feet and miles, using the international definitions (1 ft = 0.3048 m, 1 mi = 1609.344 m).",
+  "when_not_to_use": "Areas, volumes, speeds, nautical miles and historical or regional units.",
+  "examples": ["сколько метров в 10 футах", "переведи 3 мили в километры", "convert 12 inches to cm"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "value": {"type": "number", "minimum": -1000000000000, "maximum": 1000000000000},
+      "from_unit": {"type": "string", "enum": ["m", "km", "cm", "in", "ft", "mi"]},
+      "to_unit": {"type": "string", "enum": ["m", "km", "cm", "in", "ft", "mi"]}
+    },
+    "required": ["value", "from_unit", "to_unit"],
+    "additionalProperties": false
+  },
+  "output_description": "value converted to to_unit, rounded to 6 decimals, and the unit",
+  "network": []
+}

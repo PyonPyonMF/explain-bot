@@ -19,6 +19,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -26,6 +27,10 @@ import time
 import urllib.parse
 
 BOT_ID, USER_ID, CHANNEL_ID = 990000000000000001, 990000000000000002, 990000000000000003
+OWNER_ID, DM_CHANNEL_ID = 990000000000000004, 990000000000000005
+FIXTURES = Path(__file__).resolve().parent / "e2e_fixtures"
+# A capability the bot lacks; the forge-built version is e2e_fixtures/length_convert (see learning_loop).
+LOOP_REQUESTS = ["объясни текстом, сколько метров в 10 футах", "переведи текстом 3 мили в километры"]
 DEFAULT_SCENARIOS = [
     {"request": "объясни текстом, сколько дней осталось до нового года и какой это будет день недели", "expect": "text",
      "route": "covered:date_calc"},
@@ -98,15 +103,20 @@ class Brain:
         state = json.loads(re.search(r"<request_description>\s*(.*?)\s*</request_description>", user_text(body), re.S)[1])
         request = state["request"].casefold()
         tools = [json.loads(line) for line in re.findall(r"^\{.*\}$", system_text(body), re.M)]
+        words = set(re.findall(r"\w{4,}", request))
+        best = max(tools, key=lambda t: len(words & set(re.findall(r"\w{4,}", " ".join(t["examples"]).casefold()))), default=None)
+        if best and len(words & set(re.findall(r"\w{4,}", " ".join(best["examples"]).casefold()))) >= 2:
+            return {"verdict": "covered", "tools": [best["id"]], "confidence": 0.8, "reason": "e2e brain", "gap": None}
         if re.search(r"qr|напомни|напоминани|remind|mp3", request):
             return {"verdict": "gap", "tools": [], "confidence": 0.9, "reason": "e2e brain: an artifact the bot cannot make",
                     "gap": {"capability": "QR code", "summary": "Generate a QR code image for a URL or text.",
                             "inputs": "text or URL, size", "outputs": "PNG image", "category": "conversion",
                             "example_requests": ["сделай QR-код для ссылки", "qr code for this text"], "network_hosts": []}}
-        words = set(re.findall(r"\w{4,}", request))
-        best = max(tools, key=lambda t: len(words & set(re.findall(r"\w{4,}", " ".join(t["examples"]).casefold()))), default=None)
-        if best and len(words & set(re.findall(r"\w{4,}", " ".join(best["examples"]).casefold()))) >= 2:
-            return {"verdict": "covered", "tools": [best["id"]], "confidence": 0.8, "reason": "e2e brain", "gap": None}
+        if re.search(r"фут|метр|миль|мили|километр|дюйм|feet|foot|mile|inch", request):
+            return {"verdict": "gap", "tools": [], "confidence": 0.85, "reason": "e2e brain: exact unit conversion",
+                    "gap": {"capability": "length_convert", "summary": "Convert lengths exactly between metric and imperial units.",
+                            "inputs": "value, from unit, to unit", "outputs": "converted value", "category": "computation",
+                            "example_requests": ["сколько метров в футах", "convert miles to km"], "network_hosts": []}}
         return {"verdict": "builtin", "tools": [], "confidence": 0.85, "reason": "e2e brain", "gap": None}
 
     @staticmethod
@@ -140,7 +150,7 @@ class World:
 
     def __init__(self, hermetic):
         self.hermetic, self.brain, self.lock = hermetic, Brain(), threading.Lock()
-        self.discord, self.model_calls, self.jev_calls, self.next_id = [], [], [], 990000000000100000
+        self.discord, self.model_calls, self.jev_calls, self.dms, self.next_id = [], [], [], [], 990000000000100000
         world = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -168,16 +178,22 @@ class World:
                 match = re.fullmatch(r"/api/v10/channels/(\d+)/messages/(\d+)", urllib.parse.urlsplit(self.path).path)
                 if not match:
                     return self._reply(404, {})
-                world.record_discord("edit", match[2], self._body(), self.headers.get("content-type", ""))
+                world.record_discord("edit", match[2], self._body(), self.headers.get("content-type", ""), match[1])
                 self._reply(200, {"id": match[2], "channel_id": match[1]})
 
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
                 body = self._body()
-                if re.fullmatch(r"/api/v10/channels/\d+/messages", path):
+                match = re.fullmatch(r"/api/v10/channels/(\d+)/messages", path)
+                if match:
                     message_id = world.new_id()
-                    world.record_discord("post", message_id, body, self.headers.get("content-type", ""))
-                    return self._reply(200, {"id": message_id, "channel_id": str(CHANNEL_ID)})
+                    world.record_discord("post", message_id, body, self.headers.get("content-type", ""), match[1])
+                    return self._reply(200, {"id": message_id, "channel_id": match[1]})
+                if path == "/api/v10/users/@me/channels":
+                    recipient = json.loads(body).get("recipient_id")
+                    with world.lock:
+                        world.dms.append(recipient)
+                    return self._reply(200, {"id": str(DM_CHANNEL_ID), "type": 1})
                 if path == "/v1/messages" and world.hermetic:
                     request = json.loads(body)
                     with world.lock:
@@ -202,10 +218,12 @@ class World:
             self.next_id += 1
             return str(self.next_id)
 
-    def record_discord(self, op, message_id, body, content_type):
-        entry = {"op": op, "message_id": str(message_id), "content": "", "attachment_bytes": 0, "t": time.monotonic()}
+    def record_discord(self, op, message_id, body, content_type, channel=CHANNEL_ID):
+        entry = {"op": op, "message_id": str(message_id), "channel": str(channel), "content": "", "components": [],
+                 "attachment_bytes": 0, "t": time.monotonic()}
         if content_type.startswith("application/json"):
-            entry["content"] = json.loads(body or b"{}").get("content") or ""
+            payload = json.loads(body or b"{}")
+            entry["content"], entry["components"] = payload.get("content") or "", payload.get("components") or []
         else:
             entry["attachment_bytes"] = len(body)
             match = re.search(rb'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
@@ -263,12 +281,23 @@ class Capture(logging.Handler):
         self.records.append(record)
 
 
+def library_copy(data_dir):
+    """A private copy of the tool library, so the learning loop can 'merge' a tool without touching the repository."""
+    source = Path(__file__).resolve().parent.parent / "tools"
+    source = source if source.is_dir() else Path(os.environ.get("TOOLS_DIR") or "/tools")
+    target = Path(data_dir) / "tools"
+    shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__"))
+    return target
+
+
 def configure(world, live, data_dir, socket_path):
+    forge = Path(data_dir) / "forge-queue"
+    forge.mkdir(exist_ok=True)
     os.environ.update({"DISCORD_API_BASE": world.url + "/api/v10", "DISCORD_BOT_TOKEN": "e2e-discord-token",
-                       "DATA_DIR": data_dir, "TOOLS_DIR": str(Path(__file__).resolve().parent.parent / "tools")
-                       if (Path(__file__).resolve().parent.parent / "tools").is_dir() else os.environ.get("TOOLS_DIR", "/tools"),
+                       "DATA_DIR": data_dir, "TOOLS_DIR": str(Path(data_dir) / "tools"), "TOOLS_RESCAN": "0",
                        "REGISTER_COMMANDS": "0", "DAILY_LIMIT": "0", "BOT_LANG": os.environ.get("BOT_LANG") or "ru",
-                       "ROUTER_SHADOW": "1"})
+                       "ROUTER_SHADOW": "1", "FORGE_QUEUE": str(forge), "FORGE_OWNER_ID": str(OWNER_ID),
+                       "FORGE_MIN_REQUESTS": "2", "FORGE_UID": str(os.getuid()), "FORGE_GID": str(os.getgid())})
     if live:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise SystemExit("--live needs ANTHROPIC_API_KEY")
@@ -310,7 +339,7 @@ def run_scenario(bot, world, scenario):
     router.wait_idle(120)
     elapsed = time.monotonic() - clock
     decisions = [d for d in router.backlog().recent(50) if d["id"] > scenario.get("_after_decision", 0)]
-    discord = world.discord[started[0]:]
+    discord = [d for d in world.discord[started[0]:] if d["channel"] == str(CHANNEL_ID)]
     strings = gateway.mention_strings()
     status = next((d for d in discord if d["op"] == "post"), None)
     edits = [d for d in discord if status and d["op"] == "edit" and d["message_id"] == status["message_id"]]
@@ -332,8 +361,8 @@ def run_scenario(bot, world, scenario):
               status and (status["content"] == expected if expected else status["content"] in strings.values()),
               f"got {status['content'][:80]!r}, expected {expected!r}" if status else "")
         check("final answer delivered", final and final is not status and final["content"].strip(), "status was never replaced")
-        check("no failure message", final and not any(f.split("\n")[0] in final["content"] for f in failures),
-              final["content"][:200] if final else "")
+        check("no failure message", final and not final["content"].lstrip().startswith("⚠️")
+              and not any(f.split("\n")[0] in final["content"] for f in failures), final["content"][:200] if final else "")
         if scenario.get("expect") == "text":
             check("text request uploaded no video", not any(d["attachment_bytes"] for d in discord), "an attachment was uploaded")
             if world.hermetic:
@@ -363,6 +392,75 @@ def run_scenario(bot, world, scenario):
             "decisions": decisions,
             "extra_parts": extra_parts, "model_calls": world.model_calls[started[1]:],
             "jev_calls": world.jev_calls[started[2]:], "checks": checks}
+
+
+def learning_loop(bot, world, capture):
+    """The bot meets a capability it lacks twice, the owner approves the forge, the reviewed tool is merged
+    (`git pull` on the server), and the same request is then covered by the new tool."""
+    import forge_queue
+    import interactions as I
+    import router
+    import tool_registry
+    import tool_runtime
+    print("\n━━━━ self-learning loop: a capability the bot lacks")
+    checks = []
+
+    def check(name, ok, detail=""):
+        checks.append((name, bool(ok), detail))
+        print(f"   {'✓' if ok else '✗'} {name}" + ("" if ok else f" — {detail}"))
+
+    def scenario(text, route):
+        mark = len(capture.records)
+        item = {"request": text, "expect": "text", "route": route,
+                "_after_decision": max([d["id"] for d in router.backlog().recent(1)] or [0])}
+        result = run_scenario(bot, world, item)
+        show(result, capture.records[mark:])
+        checks.extend(result["checks"])
+        return result
+
+    first = len(world.discord)
+    for text in LOOP_REQUESTS:
+        scenario(text, "gap")
+    cards = [d for d in world.discord[first:] if d["channel"] == str(DM_CHANNEL_ID) and d["op"] == "post"]
+    print("\n   owner DM card:\n      " + (cards[0]["content"].replace("\n", "\n      ") if cards else "(none)"))
+    check("the owner got one card after the second request", len(cards) == 1 and world.dms[-1:] == [str(OWNER_ID)],
+          f"{len(cards)} cards, DMs {world.dms}")
+    buttons = [b["custom_id"] for row in (cards[0]["components"] if cards else []) for b in row["components"]]
+    check("the card offers Build and Ignore", buttons == ["forge:length_convert:build", "forge:length_convert:ignore"], buttons)
+    check("the card shows the specification, not users' requests",
+          cards and not any(text in cards[0]["content"] for text in LOOP_REQUESTS), "")
+
+    stranger = I.handle({"type": I.MESSAGE_COMPONENT, "user": {"id": str(USER_ID)},
+                         "data": {"custom_id": "forge:length_convert:build"}}, lambda job: True)[1]
+    check("only the owner can approve", stranger["data"]["content"] == forge_queue.strings()["owner_only"], stranger)
+    approved = I.handle({"type": I.MESSAGE_COMPONENT, "user": {"id": str(OWNER_ID)},
+                         "data": {"custom_id": "forge:length_convert:build"}}, lambda job: True)[1]
+    print("   owner clicked Build → " + approved["data"]["content"].splitlines()[-1])
+    jobs = [j for j in Path(os.environ["FORGE_QUEUE"]).iterdir() if (j / "request.json").is_file()]
+    request = json.loads((jobs[0] / "request.json").read_text()) if jobs else {}
+    check("one forge job with the specification only", len(jobs) == 1 and request.get("capability") == "length_convert"
+          and not any(text in json.dumps(request, ensure_ascii=False) for text in LOOP_REQUESTS), request)
+
+    # scripts/tool_forge.py builds, gates and opens the pull request (scripts/test_tool_forge.py covers it with a fake
+    # builder). Here the reviewed result is merged and pulled: the fixture is what the forge produced.
+    library = Path(os.environ["TOOLS_DIR"])
+    shutil.copytree(FIXTURES / "length_convert", library / "length_convert")
+    url = "https://github.com/PyonPyonMF/explain-bot/pull/1"
+    if jobs:
+        (jobs[0] / "response.json").write_text(json.dumps({"status": "pr_opened", "pr_url": url, "rounds": 2,
+                                                            "tests": {"own": {"passed": 6, "total": 6}}}))
+    forge_queue.collect()
+    edits = [d for d in world.discord if d["channel"] == str(DM_CHANNEL_ID) and d["op"] == "edit"]
+    check("the card links the pull request", edits and url in edits[-1]["content"], edits[-1]["content"] if edits else "")
+    registry = tool_registry.registry()
+    registry.sync(force=True)
+    tool = registry.get("length_convert")
+    report = tool_runtime.run_tests(tool) if tool else {"passed": 0, "total": 0}
+    print(f"   merged + git pull → length_convert[{tool['status'] if tool else 'missing'}]: "
+          f"{report['passed']}/{report['total']} declarative tests in the executor")
+    check("the merged tool is live without a restart", tool and report["passed"] == report["total"] > 0, report)
+    scenario(LOOP_REQUESTS[0], "covered:length_convert")
+    return {"checks": checks}
 
 
 def tool_probe():
@@ -415,6 +513,7 @@ def main(argv=None):
         raise SystemExit("run e2e_selftest in a fresh process")
     world = World(hermetic=not args.live)
     data_dir = tempfile.mkdtemp(prefix="e2e-data-")
+    library_copy(data_dir)
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     configure(world, args.live, data_dir, None)
     socket_path, executor = start_executor()
@@ -452,6 +551,10 @@ def main(argv=None):
         results.append(result)
         show(result, capture.records[mark:])
         ok = ok and all(passed for _, passed, _ in result["checks"])
+    if not args.live and not args.requests:
+        loop = learning_loop(bot, world, capture)
+        results.append(loop)
+        ok = ok and all(passed for _, passed, _ in loop["checks"])
     errors = [r for r in capture.records if r.levelno >= logging.ERROR]
     for record in errors:
         print(f"ERROR {record.name}: {record.getMessage()[:300]}")

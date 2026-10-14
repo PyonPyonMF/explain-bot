@@ -287,6 +287,12 @@ def _run(state):
         decision = decide(state)
         ms = int(1000 * (time.monotonic() - started))
         backlog().add(decision, state, ms)
+        try:
+            import forge_queue
+            forge_queue.consider(decision)  # owner card once a missing capability has enough demand
+            forge_queue.collect()
+        except Exception as exc:
+            log.warning("forge queue unavailable: %s", type(exc).__name__)
         log.info("router verdict=%s source=%s confidence=%.2f tools=%s capability=%s ms=%d", decision["verdict"],
                  decision["source"], decision["confidence"], ",".join(decision["tools"]) or "-",
                  (decision.get("gap") or {}).get("capability", "-"), ms)
