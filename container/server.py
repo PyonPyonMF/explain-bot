@@ -25,19 +25,38 @@ MAX_BODY = 1 << 20
 
 def worker():
     from pipeline import handle_job  # import here so the server answers health checks at once
+    import job_journal as J
     while True:
-        job = JOBS.get()
+        job, key = JOBS.get()
         log.info("job start (%s, %d chars, question=%s)", job.get("kind"), len(job.get("text") or ""), bool(job.get("question")))
-        handle_job(job)
-        JOBS.task_done()
+        J.get().start(key)
+        try:
+            handle_job(job)
+        finally:
+            J.get().finish(key)
+            JOBS.task_done()
 
 
-def enqueue(job):
+def enqueue(job, key=None):
+    import job_journal as J
+    key = key or J.get().record(job)  # None for interaction-token jobs: they cannot outlive a restart.
     try:
-        JOBS.put_nowait(job)
+        JOBS.put_nowait((job, key))
         return True
     except queue.Full:
+        J.get().finish(key)
         return False
+
+
+def resume():
+    """Channel-reply jobs only come from Gateway mode, so this usually finds nothing; they need the bot token."""
+    if not os.environ.get("DISCORD_BOT_TOKEN"):
+        return
+    try:
+        import job_journal as J
+        J.resume(lambda: not JOBS.full(), enqueue)
+    except Exception:
+        log.exception("could not resume journaled jobs")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -100,6 +119,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     threading.Thread(target=worker, daemon=True).start()
+    resume()
     port = int(os.environ.get("PORT") or 8080)
     log.info("listening on %d (interactions=%s, jobs endpoint=%s)", port, INTERACTIONS, JOBS_ENDPOINT)
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

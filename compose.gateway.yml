@@ -5,6 +5,9 @@ services:
     build: ./container
     command: ["python", "gateway.py"]
     restart: unless-stopped
+    # On stop/redeploy the bot drains: running jobs finish (DRAIN_TIMEOUT, default 900 s) and queued ones resume
+    # after the restart. Keep this longer than DRAIN_TIMEOUT, or Docker kills the container mid-render.
+    stop_grace_period: 16m
     depends_on:
       - pot
     env_file: .env

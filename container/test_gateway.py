@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import discord
 import gateway
 import interactions as I
+import job_journal as J
 
 
 def interaction(data, kind=discord.InteractionType.application_command, *, message_id=None, user_id=42):
@@ -57,6 +58,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.old_state = I._state
         I._state = I.State(str(Path(self.tmp.name) / "bot.sqlite"))
+        self.old_journal, J._journal = J._journal, J.Journal(str(Path(self.tmp.name) / "jobs.sqlite"))
         self.bot = gateway.ExplainBot("test-token")
         self.bot._connection.user = SimpleNamespace(id=999)
         self.submit = Mock()
@@ -68,6 +70,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await self.bot.close()
         I._state.db.close()
         I._state = self.old_state
+        J._journal.db.close()
+        J._journal = self.old_journal
         self.tmp.cleanup()
         self.env.stop()
 
