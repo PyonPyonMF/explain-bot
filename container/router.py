@@ -33,7 +33,8 @@ BUILTIN = ("The bot's existing pipeline: an explanation or answer written by the
            "the supplied Discord post, images, GIFs, PDFs, linked pages (X, Reddit, Telegram, articles), speech "
            "transcripts of supplied video/audio/YouTube, and bounded web and public-forum research; delivered as a "
            "narrated video (default), a text answer, a transcript, a summary, a deep forum investigation, an image "
-           "walkthrough or a 3D classroom lesson.")
+           "walkthrough or a 3D classroom lesson; and generative enhancement, upscaling, restoration or colorization of a "
+           "supplied photo through the image generator.")
 GAP = ("A capability the bot lacks: the correct answer needs exact computation, live or structured data from a "
        "specific service, a file conversion or generated artifact other than video/text, or an action (reminders, "
        "posting, moderation, scheduling) that neither the existing pipeline nor a library tool provides.")

@@ -139,6 +139,15 @@ Videos can use actual image references instead of drawing every object with geom
   diagnostic labels do not become facts, and an unprovable side allegation does not block the supported answer.
   Missing-source clarification previews end at sentence/word boundaries.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
+- **Photo enhancement.** `джарвис enhance`, `улучши фото`, `сделай чётче`, `апскейл`, `восстанови старое фото` or
+  `раскрась это фото` with an attached (or replied-to) picture returns an improved picture instead of an explanation.
+  The same host Codex worker runs in `enhance` mode: it edits from the photo and is told to keep the same picture
+  (composition, subjects, identities, objects, visible text, black-and-white stays black-and-white unless
+  colorization was asked) and to improve only resolution, sharpness, noise and damage. Only the photo and the colorize
+  flag are sent, never the request text. The reply is labeled as a generative reconstruction — added detail is
+  plausible, not recovered — and shows the size change. Results larger than `MAX_UPLOAD_MB` become JPEG and, only if
+  needed, smaller. Questions about the words ("что такое upscale") stay explanations. `IMAGE_ENHANCE=0` disables it;
+  without the worker the bot says that enhancement is unavailable.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.
   Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.

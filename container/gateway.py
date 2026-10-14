@@ -31,6 +31,7 @@ MENTION_STRINGS = {
         "summary": "📝 Расшифрую речь и подготовлю краткое резюме…",
         "research": "🔎 Начинаю глубокое исследование. Соберу хронологию и версии сторон, затем сделаю видео с озвучкой…",
         "research_text": "🔎 Начинаю глубокое исследование и подготовлю текстовый разбор по твоей просьбе…",
+        "enhance": "🪄 Улучшу изображение. Это займёт пару минут…",
         "followup_question": "Объясни предыдущий ответ подробнее и проще.",
         "followup_unavailable": "Не удалось восстановить материал предыдущего ролика. Пришли исходную ссылку или файл вместе с вопросом и упоминанием бота.",
         "unavailable": "Не могу прочитать цитируемое сообщение. Оно удалено или у меня нет доступа. Скопируй текст сюда либо дай мне доступ к истории сообщений.",
@@ -46,6 +47,7 @@ MENTION_STRINGS = {
         "summary": "📝 I'll transcribe the speech and prepare a short summary…",
         "research": "🔎 Starting deep research. I'll turn the chronology and competing accounts into a narrated video…",
         "research_text": "🔎 Starting deep research and preparing the text report you requested…",
+        "enhance": "🪄 I'll enhance the image. This takes a couple of minutes…",
         "followup_question": "Explain the previous answer more clearly and in more detail.",
         "followup_unavailable": "I couldn't recover the previous video's source. Send the original link or file with your question and mention the bot.",
         "unavailable": "I can't read the quoted message. It was deleted or I don't have access. Copy its text here or give me Read Message History permission.",
@@ -411,7 +413,7 @@ class ExplainBot(discord.Client):
                 await reply(I._S()["limit"].format(limit))
                 return
             job["quota_paid"] = limit > 0
-            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary", "research") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
+            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary", "research", "enhance") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
             if accepted == "research" and job.get("response_format") == "text":
                 accepted = "research_text"
             status = await reply(mention_strings()[accepted])

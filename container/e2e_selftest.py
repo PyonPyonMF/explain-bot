@@ -42,9 +42,32 @@ DEFAULT_SCENARIOS = [
      "expect": "text", "route": "gap"},
     {"request": "объясни текстом, почему кошки мурлыкают", "expect": "text", "route": "builtin"},
     {"request": "помощь", "expect": "help"},
-    # A meme command with a photo: no "текстом", so it becomes a portrait image walkthrough video.
-    {"request": "джарвис enhance", "expect": "video", "attach": ["sample:picture"]},
+    # A meme command with a photo: the bot restores the picture through the Codex image worker.
+    {"request": "джарвис enhance", "expect": "image", "attach": ["sample:picture"]},
+    # An explanation of a photo becomes a portrait image walkthrough video.
+    {"request": "объясни, что на этой картинке", "expect": "video", "attach": ["sample:picture"]},
 ]
+FAKE_CODEX = """
+import json, os, sys, uuid
+from pathlib import Path
+from PIL import Image, ImageFilter
+args, prompt = sys.argv[1:], sys.stdin.read()
+home = Path(os.environ["CODEX_HOME"])
+with (home / "calls.jsonl").open("a") as log:
+    log.write(json.dumps({"args": args, "prompt": prompt}) + "\\n")
+out = Path(args[args.index("--output-last-message") + 1])
+images = [args[i + 1] for i, a in enumerate(args) if a == "--image"]
+result = {"image_path": "", "description": "e2e fake codex makes only enhancements", "references": []}
+if images and prompt.startswith("Restore and enhance"):
+    with Image.open(images[0]) as source:
+        picture = source.convert("RGB")
+    picture = picture.resize((picture.width * 2, picture.height * 2), Image.LANCZOS).filter(ImageFilter.UnsharpMask(2, 120, 2))
+    (home / "generated_images").mkdir(exist_ok=True)
+    path = home / "generated_images" / (uuid.uuid4().hex + ".png")
+    picture.save(path)
+    result.update(image_path=str(path), description="e2e: 2x Lanczos upscale with an unsharp mask")
+out.write_text(json.dumps(result))
+"""
 
 
 def system_text(body):
@@ -265,7 +288,12 @@ class World:
                 match = re.fullmatch(r"/api/v10/channels/(\d+)/messages/(\d+)", urllib.parse.urlsplit(self.path).path)
                 if not match:
                     return self._reply(404, {})
-                world.record_discord("edit", match[2], self._body(), self.headers.get("content-type", ""), match[1])
+                body = self._body()
+                limit = float(os.environ.get("MAX_UPLOAD_MB") or 9.5) * 1024 * 1024 + 64 * 1024  # + multipart framing
+                if len(body) > limit:  # like Discord: the whole edit is rejected
+                    world.record_discord("rejected_upload", match[2], b"{}", "application/json", match[1])
+                    return self._reply(413, {"message": "Request entity too large", "code": 40005})
+                world.record_discord("edit", match[2], body, self.headers.get("content-type", ""), match[1])
                 self._reply(200, {"id": match[2], "channel_id": match[1]})
 
             def do_POST(self):
@@ -327,11 +355,12 @@ class World:
             entry["attachment_bytes"] = len(body)
             match = re.search(rb'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
             entry["content"] = json.loads(b'"' + match[1] + b'"') if match else ""
-            video = re.search(rb'filename="([^"]+\.mp4)"\r\nContent-Type: video/mp4\r\n\r\n(.*)\r\n--[0-9a-f]+--', body, re.S)
-            if video:
+            upload = re.search(rb'filename="[^"]+\.(mp4|png|jpg)"\r\nContent-Type: (?:video/mp4|image/png|image/jpeg)\r\n\r\n(.*)\r\n--[0-9a-f]+--',
+                               body, re.S)
+            if upload:
                 with self.lock:
-                    path = self.media_dir / f"upload-{len(self.discord) + 1}.mp4"
-                path.write_bytes(video[2])
+                    path = self.media_dir / f"upload-{len(self.discord) + 1}.{upload[1].decode()}"
+                path.write_bytes(upload[2])
                 entry["media_path"] = str(path)
         with self.lock:
             self.discord.append(entry)
@@ -479,6 +508,25 @@ def configure(world, live, data_dir, socket_path):
         os.environ.pop("TOOLS_LOCAL_SANDBOX", None)
 
 
+def start_codex_worker(data_dir):
+    """The real host image worker (scripts/codex_visual_worker.py) with a fake `codex` CLI; None if not available."""
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    if not (scripts / "codex_visual_worker.py").is_file():
+        return None
+    home, queue = Path(data_dir) / "codex-home", Path(data_dir) / "visual-queue"
+    home.mkdir()
+    queue.mkdir()
+    fake = Path(data_dir) / "codex"
+    fake.write_text(f"#!{sys.executable}\n" + FAKE_CODEX)
+    fake.chmod(0o755)
+    os.environ.update({"CODEX_BIN": str(fake), "CODEX_HOME": str(home), "CODEX_VISUAL_QUEUE": str(queue),
+                       "CODEX_VISUAL_UID": str(os.getuid()), "CODEX_VISUAL_GID": str(os.getgid()), "CODEX_VISUAL_TIMEOUT": "60"})
+    sys.path.insert(0, str(scripts))
+    import codex_visual_worker
+    threading.Thread(target=codex_visual_worker.main, daemon=True).start()
+    return home
+
+
 def start_executor():
     """Use the deployment's executor when its socket exists, else run one in-process on a temporary socket."""
     existing = os.environ.get("TOOLS_EXECUTOR_SOCKET")
@@ -539,6 +587,29 @@ def run_scenario(bot, world, scenario):
         refusal = re.search(r"^(?:⚠️|Не удалось|Не могу)|Попробуй (?:ещё раз|уточнить)|^(?:Could not|I can't)", final["content"].strip()) if final else None
         check("no failure message", final and not refusal and not any(f.split("\n")[0] in final["content"] for f in failures),
               final["content"][:200] if final else "")
+        if scenario.get("expect") == "image":
+            import image_enhance
+            uploads = [d for d in discord if (d.get("media_path") or "").endswith((".png", ".jpg"))]
+            check("status says the image is being enhanced", status and status["content"] == strings["enhance"],
+                  status["content"][:80] if status else "")
+            check("an enhanced picture was uploaded", uploads, "no PNG in the final edit")
+            check("the answer says the detail is generated", final and image_enhance.strings()["label"][:20] in final["content"],
+                  final["content"][:200] if final else "")
+            check("no video for an enhancement", not any((d.get("media_path") or "").endswith(".mp4") for d in discord), "")
+            check("the upload fit Discord's size limit", not any(d["op"] == "rejected_upload" for d in discord),
+                  "the fake Discord rejected an oversized upload (413)")
+            if uploads:
+                from PIL import Image
+                with Image.open(uploads[-1]["media_path"]) as produced:
+                    scenario["_media"] = {"path": uploads[-1]["media_path"], "width": produced.width, "height": produced.height,
+                                          "duration": 0, "frames": []}
+            calls_log = Path(os.environ.get("CODEX_HOME") or "/nonexistent") / "calls.jsonl"
+            if world.hermetic and calls_log.exists():
+                last = json.loads(calls_log.read_text().splitlines()[-1])
+                check("the image worker ran in enhance mode with exactly one photo",
+                      last["prompt"].startswith("Restore and enhance") and last["args"].count("--image") == 1, last["args"][-6:])
+                words = [w for w in re.findall(r"\w{4,}", scenario["request"].casefold()) if w not in ("enhance",)]
+                check("the request text never reached the image worker", not any(w in last["prompt"].casefold() for w in words), words)
         if scenario.get("expect") == "video":
             uploads = [d for d in discord if d.get("media_path")]
             check("a video was uploaded to the status message", uploads, "no MP4 in the final edit")
@@ -704,8 +775,11 @@ def show(result, records):
         print("   discord final  : " + result["final"]["content"][:1500].replace("\n", "\n                    "))
     if result.get("media"):
         media = result["media"]
-        print(f"   video          : {media['width']}x{media['height']}, {media['duration']:.1f}s → {media['path']}")
-        print("   frames         : " + ", ".join(media["frames"]))
+        kind = "video" if media["path"].endswith(".mp4") else "picture"
+        print(f"   {kind:<15}: {media['width']}x{media['height']}" + (f", {media['duration']:.1f}s" if media["duration"] else "")
+              + f" → {media['path']}")
+        if media["frames"]:
+            print("   frames         : " + ", ".join(media["frames"]))
     for part in result["extra_parts"]:
         print(f"   discord part   : {part['content'][:200]}")
     for name, ok, detail in result["checks"]:
@@ -715,7 +789,7 @@ def show(result, records):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("requests", nargs="*", help="mention text without the bot mention")
-    parser.add_argument("--expect", choices=["text", "video", "help", "clarify", "any"], default="any")
+    parser.add_argument("--expect", choices=["text", "video", "image", "help", "clarify", "any"], default="any")
     parser.add_argument("--live", action="store_true", help="real Messages API (and Jev if TYPESAFE_API_KEY is set)")
     parser.add_argument("--allow-video", action="store_true", help="also run requests that render a video")
     parser.add_argument("--json", action="store_true", help="print the raw observations as JSON")
@@ -727,6 +801,7 @@ def main(argv=None):
     world = World(hermetic=not args.live)
     data_dir = tempfile.mkdtemp(prefix="e2e-data-")
     library_copy(data_dir)
+    codex_home = start_codex_worker(data_dir) if not args.live else None
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     configure(world, args.live, data_dir, None)
     socket_path, executor = start_executor()
@@ -757,7 +832,10 @@ def main(argv=None):
               + (f" — failed: {report['failed']}" if report["failed"] else ""))
     results, ok = [], all(r["passed"] == r["total"] for r in probe["tests"]) and not probe["invalid"]
     for scenario in scenarios:
-        if not args.live and not args.allow_video and scenario.get("expect") not in ("help", "video") and \
+        if scenario.get("expect") == "image" and not args.live and codex_home is None:
+            print(f"\n━━ skipped «{scenario['request']}»: needs scripts/codex_visual_worker.py (or --live with the deployment's worker)")
+            continue
+        if not args.live and not args.allow_video and scenario.get("expect") not in ("help", "video", "image") and \
                 response_format(scenario["request"]) == "video":
             print(f"\n━━ skipped «{scenario['request']}»: renders a video; use --live --allow-video")
             continue

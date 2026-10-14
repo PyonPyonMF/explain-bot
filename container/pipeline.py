@@ -514,8 +514,25 @@ def source_notices(job):
     return notices
 
 
-def discord_video(job, path, title, debug=""):
+def discord_file(job, path, filename, content_type, content):
+    """Replace the status message with content and one attached file."""
     boundary = uuid.uuid4().hex
+    payload = {"content": content[:1900], "allowed_mentions": {"parse": []}, "attachments": [{"id": 0, "filename": filename}]}
+    with open(path, "rb") as f:
+        data = f.read()
+    parts = [
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n".encode()
+        + json.dumps(payload).encode() + b"\r\n",
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n".encode()
+        + data + b"\r\n",
+        f"--{boundary}--\r\n".encode(),
+    ]
+    body = b"".join(parts)
+    headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
+    _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
+
+
+def discord_video(job, path, title, debug=""):
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
     if job.get("followup") and not job.get("research_video") and (job.get("video_script") or {}).get("excerpt"):
         content += "\n\n" + job["video_script"]["excerpt"]
@@ -528,20 +545,7 @@ def discord_video(job, path, title, debug=""):
             if len(content) + len(line) + 2 > 1900:
                 break
             content += "\n\n" + line
-    payload = {"content": content[:1900], "allowed_mentions": {"parse": []},
-               "attachments": [{"id": 0, "filename": "explain.mp4"}]}
-    with open(path, "rb") as f:
-        video = f.read()
-    parts = [
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n".encode()
-        + json.dumps(payload).encode() + b"\r\n",
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"explain.mp4\"\r\nContent-Type: video/mp4\r\n\r\n".encode()
-        + video + b"\r\n",
-        f"--{boundary}--\r\n".encode(),
-    ]
-    body = b"".join(parts)
-    headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
-    _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
+    discord_file(job, path, "explain.mp4", "video/mp4", content)
     try:
         from followups import remember
         remember(job)
@@ -664,6 +668,10 @@ def handle_job(job):
             job["prepared_inputs"] = (images, texts, notes)
             from conversation import requested
             job["conversation_analysis"] = requested(job, texts) and not job.get("primary_document") and not job.get("primary_x") and not job.get("primary_youtube")
+            if job["text_task"] == "enhance":
+                import image_enhance
+                image_enhance.run(job, images, workdir)  # an edited picture, not an explanation
+                return
         if job.get("primary_youtube") or job.get("primary_x_video"):
             from speech import read_transcripts
             available = any(r["status"] == "ok" and r["text"] for r in read_transcripts(texts))
