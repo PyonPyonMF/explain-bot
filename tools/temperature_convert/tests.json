@@ -1,0 +1,22 @@
+[
+  {"name": "Celsius to Fahrenheit", "args": {"value": 25, "from_unit": "C", "to_unit": "F"},
+   "expect": {"value": 77.0, "unit": "F"}},
+  {"name": "Fahrenheit to Celsius with a repeating decimal", "args": {"value": 451, "from_unit": "F", "to_unit": "C"},
+   "expect": {"value": 232.777778, "unit": "C"}},
+  {"name": "zero Kelvin to Celsius", "args": {"value": 0, "from_unit": "K", "to_unit": "C"},
+   "expect": {"value": -273.15, "unit": "C"}},
+  {"name": "absolute zero Celsius to Kelvin is exactly zero", "args": {"value": -273.15, "from_unit": "C", "to_unit": "K"},
+   "expect": {"value": 0.0, "unit": "K"}},
+  {"name": "Celsius and Fahrenheit meet at -40", "args": {"value": -40, "from_unit": "F", "to_unit": "C"},
+   "expect": {"value": -40.0, "unit": "C"}},
+  {"name": "same-unit conversion passes the value through", "args": {"value": 100, "from_unit": "C", "to_unit": "C"},
+   "expect": {"value": 100.0, "unit": "C"}},
+  {"name": "zero Kelvin to Fahrenheit", "args": {"value": 0, "from_unit": "K", "to_unit": "F"},
+   "expect": {"value": -459.67, "unit": "F"}},
+  {"name": "below absolute zero in Celsius is declined", "args": {"value": -300, "from_unit": "C", "to_unit": "K"},
+   "expect_error": "below_absolute_zero"},
+  {"name": "negative Kelvin is declined even for a same-unit request", "args": {"value": -10, "from_unit": "K", "to_unit": "K"},
+   "expect_error": "below_absolute_zero"},
+  {"name": "unsupported unit is rejected, never guessed", "args": {"value": 25, "from_unit": "X", "to_unit": "C"},
+   "expect_error": "must be one of"}
+]
