@@ -21,7 +21,7 @@ def png():
 
 class ImageAnswerTests(unittest.TestCase):
     def test_explicit_image_requests_choose_the_image_format_and_skip_picker(self):
-        for request in ('сгенерируй картинку','нарисуй кота','создай изображение магнитного трека',
+        for request in ('сгенерируй картинку','сгенирируй картинку','нарисуй кота','создай изображение магнитного трека',
                         'Сделай мне иллюстрацию','generate an image of a cat','Draw a dragon'):
             self.assertEqual(response_format(request),'image',request)
             self.assertIsNone(C.reason(request,True),request)
@@ -57,7 +57,7 @@ class ImageAnswerTests(unittest.TestCase):
         self.assertNotIn('NEW narrated video',codex.call_args.kwargs['source_context'])
 
     def test_missing_subject_or_disabled_provider_does_not_generate_an_arbitrary_image(self):
-        for enabled,request in [('1','сгенерируй картинку'),('0','сгенерируй картинку кота')]:
+        for enabled,request in [('1','сгенерируй картинку'),('1','сгенирируй картинку'),('0','сгенерируй картинку кота')]:
             with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,{'CODEX_IMAGES':enabled}), \
                  patch('followups.prepare',return_value=([],[],[])),patch.object(assets,'request_codex') as codex:
                 with self.assertRaises(P.UserError):A.make_image({'kind':'query','text':request},d)

@@ -15,7 +15,7 @@ def _request_words(text):
     """Only the caller's own words can select an action or output format."""
     text = re.sub(r"```[\s\S]*?```|`[^`\n]*`|«[^»]*»|“[^”]*”|\"[^\"\n]*\"|(?<!\w)'[^'\n]*'(?!\w)", " ", text)
     text = re.sub(r"(?m)^\s*>.*$", " ", text).lower().replace("ё", "е")
-    return re.sub(r"https?://\S+", " ", text)
+    return re.sub(r"https?://\S+", " ", text).replace("сгенирируй", "сгенерируй")
 
 
 def text_task(text):
