@@ -27,6 +27,9 @@ FAKE_CLAUDE = textwrap.dedent('''
     log = Path(os.environ.get("HOME", "/tmp")) / "claude-calls.jsonl"
     with log.open("a") as f:
         f.write(json.dumps({"argv": sys.argv[1:], "env": sorted(os.environ), "cwd": os.getcwd(), "prompt": prompt[:6000]}) + "\\n")
+    if prompt.startswith("Write hidden acceptance tests") and (Path.home() / "hidden_fails").exists():
+        print(json.dumps({"type": "result", "subtype": "success", "result": "could not", "is_error": False}))
+        sys.exit(0)
     if prompt.startswith("Write hidden acceptance tests"):
         cases = [{"name": "feet to metres", "args": {"value": 10, "from_unit": "ft", "to_unit": "m"}, "expect": {"value": 3.048}},
                  {"name": "miles to km", "args": {"value": 2, "from_unit": "mi", "to_unit": "km"}, "expect": {"value": 3.218688}},
@@ -187,6 +190,17 @@ class ForgeTests(unittest.TestCase):
         self.assertFalse(self.github.requests)
         heads = subprocess.run(["git", "-C", str(self.bare), "branch"], capture_output=True, text=True).stdout
         self.assertNotIn("tools/", heads)
+
+    def test_a_failing_hidden_author_does_not_rerun_the_builder(self):
+        (self.home / "hidden_fails").write_text("1")
+        job_dir = self.job()
+        forge.run_job(job_dir)
+        result = json.loads((job_dir / "response.json").read_text())
+        self.assertEqual((result["status"], result["reason"]), ("failed", "the hidden tests could not be written"))
+        calls = self.calls()
+        self.assertEqual(sum(not c["prompt"].startswith("Write hidden") for c in calls), 1)
+        self.assertEqual(sum(c["prompt"].startswith("Write hidden") for c in calls), 2)
+        self.assertFalse(self.github.requests)
 
     def test_existing_or_invalid_ids_never_start_a_builder(self):
         for capability in ("date_calc", "Bad-Id"):
