@@ -18,8 +18,10 @@ import json
 import logging
 import os
 from pathlib import Path
+import mimetypes
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -40,6 +42,8 @@ DEFAULT_SCENARIOS = [
      "expect": "text", "route": "gap"},
     {"request": "объясни текстом, почему кошки мурлыкают", "expect": "text", "route": "builtin"},
     {"request": "помощь", "expect": "help"},
+    # A meme command with a photo: no "текстом", so it becomes a portrait image walkthrough video.
+    {"request": "джарвис enhance", "expect": "video", "attach": ["sample:picture"]},
 ]
 
 
@@ -70,6 +74,12 @@ def phase(body):
         return "text_answer"
     if system.startswith("Summarize the supplied video/audio"):
         return "summary"
+    if system.startswith("Plan visual assets for an educational video"):
+        return "visual_plan"
+    if system.startswith("Plan a short narrated portrait video"):
+        return "image_plan"
+    if system.startswith("Review a portrait image walkthrough"):
+        return "image_review"
     return "other"
 
 
@@ -86,6 +96,13 @@ class Brain:
             stop = "tool_use" if calls else stop
         elif kind == "router":
             text = json.dumps(self.route(body))
+        elif kind == "visual_plan":
+            text = json.dumps({"topic": "supplied image", "visual_strategy": "walk through the supplied image",
+                               "presentation": "image_walkthrough", "search_queries": [], "image_prompt": "", "research_query": ""})
+        elif kind == "image_plan":
+            text = json.dumps(self.image_plan(body), ensure_ascii=False)
+        elif kind == "image_review":
+            text = json.dumps({"ok": True})
         elif kind == "text_answer":
             request = re.search(r"<(request|question)>\s*(.*?)\s*</\1>", user_text(body), re.S)
             dated = re.search(r"Date of the request \(UTC\): (\S+)", user_text(body))
@@ -124,6 +141,25 @@ class Brain:
         return [{"type": "tool_use", "id": "toolu_e2e_between", "name": "date_calc",
                  "input": {"operation": "between", "date": today, "other_date": new_year}},
                 {"type": "tool_use", "id": "toolu_e2e_weekday", "name": "date_calc", "input": {"operation": "describe", "date": new_year}}]
+
+    @staticmethod
+    def image_plan(body):
+        """A valid three-scene walkthrough of the first supplied image. The scripted brain cannot see the picture,
+        so the narration says so: this checks the video path (planning, review, voice, render, upload), not content."""
+        ids = re.findall(r'"id":\s*"(image_\d+)"', user_text(body))
+        if not ids:
+            return {"use_image_story": False}
+        image = ids[0]
+        # Focused regions only: the renderer adds the overview itself and rejects a full-frame focus.
+        scenes = [("Левая часть", "Тестовый мозг не видит изображение: это проверка видеопути, а не разбор снимка.",
+                   [0.05, 0.10, 0.50, 0.75], [0.12, 0.20, 0.42, 0.55], "Левая часть"),
+                  ("Правая часть", "Камера переходит к правой части кадра и подписывает её короткой выноской.",
+                   [0.48, 0.02, 0.82, 0.62], [0.52, 0.08, 0.76, 0.45], "Правая часть"),
+                  ("Центр снизу", "В конце камера показывает нижнюю середину кадра, а субтитры повторяют эту фразу.",
+                   [0.25, 0.45, 0.75, 0.97], [0.32, 0.55, 0.68, 0.90], "Нижняя середина")]
+        return {"use_image_story": True, "title": "e2e: проверка видеопути", "language": "ru", "scenes": [
+            {"asset_id": image, "heading": heading, "narration": narration, "focus": focus,
+             "callouts": [{"box": box, "label": label}], "protect": []} for heading, narration, focus, box, label in scenes]}
 
     @staticmethod
     def length_calls(body):
@@ -194,6 +230,7 @@ class World:
     def __init__(self, hermetic):
         self.hermetic, self.brain, self.lock = hermetic, Brain(), threading.Lock()
         self.discord, self.model_calls, self.jev_calls, self.dms, self.next_id = [], [], [], [], 990000000000100000
+        self.files, self.tts_calls, self.media_dir = {}, [], Path(tempfile.mkdtemp(prefix="e2e-media-"))
         world = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -213,6 +250,13 @@ class World:
 
             def do_GET(self):
                 path = urllib.parse.urlsplit(self.path).path
+                if path in world.files:  # the fake Discord CDN for --attach
+                    data, ctype = world.files[path]
+                    self.send_response(200)
+                    self.send_header("content-type", ctype)
+                    self.send_header("content-length", str(len(data)))
+                    self.end_headers()
+                    return self.wfile.write(data)
                 if re.fullmatch(r"/api/v10/channels/\d+/messages", path):
                     return self._reply(200, [])
                 self._reply(404, {"message": "Unknown Message", "code": 10008})
@@ -246,6 +290,16 @@ class World:
                                                   "chars": len(body), "body": body.decode("utf-8", "replace"),
                                                   "calls": [b["name"] for b in reply["content"] if b["type"] == "tool_use"]})
                     return self._reply(200, reply)
+                if path.startswith("/v1/text-to-speech/") and world.hermetic:
+                    text = json.loads(body).get("text") or ""
+                    with world.lock:
+                        world.tts_calls.append(len(text))
+                    audio = silent_mp3(max(1.5, min(20.0, len(text) / 14)))
+                    self.send_response(200)
+                    self.send_header("content-type", "audio/mpeg")
+                    self.send_header("content-length", str(len(audio)))
+                    self.end_headers()
+                    return self.wfile.write(audio)
                 if path == "/v1/systemone" and world.hermetic:
                     request = json.loads(body)
                     with world.lock:
@@ -273,8 +327,72 @@ class World:
             entry["attachment_bytes"] = len(body)
             match = re.search(rb'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
             entry["content"] = json.loads(b'"' + match[1] + b'"') if match else ""
+            video = re.search(rb'filename="([^"]+\.mp4)"\r\nContent-Type: video/mp4\r\n\r\n(.*)\r\n--[0-9a-f]+--', body, re.S)
+            if video:
+                with self.lock:
+                    path = self.media_dir / f"upload-{len(self.discord) + 1}.mp4"
+                path.write_bytes(video[2])
+                entry["media_path"] = str(path)
         with self.lock:
             self.discord.append(entry)
+
+
+def sample_picture(directory):
+    """A synthetic 3:2 photo-like picture (no third-party image in the repository)."""
+    from PIL import Image, ImageDraw
+    path = Path(directory) / "sample-picture.png"
+    image = Image.new("RGB", (1500, 1000), (70, 74, 82))
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((150, 250, 650, 750), fill=(225, 225, 215))
+    draw.ellipse((820, 120, 1280, 580), fill=(160, 140, 120))
+    draw.rectangle((500, 700, 1050, 950), fill=(110, 40, 40))
+    draw.text((560, 780), "e2e sample", fill=(255, 255, 255))
+    image.save(path)
+    return str(path)
+
+
+def silent_mp3(seconds, cache={}):
+    key = round(seconds, 1)
+    if key not in cache:
+        with tempfile.TemporaryDirectory() as work:
+            out = Path(work) / "a.mp3"
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", str(key),
+                            "-c:a", "libmp3lame", "-b:a", "64k", str(out)], check=True, timeout=60)
+            cache[key] = out.read_bytes()
+    return cache[key]
+
+
+def media_info(path):
+    """Duration and size of an uploaded video, plus three frames saved next to it for a human to look at."""
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height:format=duration",
+                            "-of", "json", path], capture_output=True, text=True, timeout=60)
+    info = json.loads(probe.stdout or "{}")
+    duration = float((info.get("format") or {}).get("duration") or 0)
+    stream = (info.get("streams") or [{}])[0]
+    frames = []
+    for i, at in enumerate((0.2, 0.5, 0.85)):
+        frame = Path(path).with_name(Path(path).stem + f"-frame{i + 1}.jpg")
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", f"{duration * at:.2f}", "-i", path, "-frames:v", "1",
+                        str(frame)], timeout=60)
+        if frame.exists():
+            frames.append(str(frame))
+    return {"duration": duration, "width": stream.get("width"), "height": stream.get("height"), "frames": frames}
+
+
+class FakeAttachment:
+    """A Discord attachment served by the fake CDN."""
+
+    def __init__(self, world, path):
+        path = Path(path)
+        self.id, self.filename = int(world.new_id()), path.name
+        self.content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        data = path.read_bytes()
+        self.size, self.url = len(data), f"{world.url}/cdn/attachments/{CHANNEL_ID}/{self.id}/{path.name}"
+        world.files[urllib.parse.urlsplit(self.url).path] = (data, self.content_type)
+
+    def to_dict(self):
+        return {"id": str(self.id), "filename": self.filename, "size": self.size, "url": self.url, "proxy_url": self.url,
+                "content_type": self.content_type}
 
 
 class FakeUser:
@@ -303,12 +421,13 @@ class FakeStatus:
 class FakeMessage:
     """The minimal discord.Message surface used by on_message/mention_job."""
 
-    def __init__(self, world, text):
+    def __init__(self, world, text, attachments=()):
         self.world, self.id = world, int(world.new_id())
         self.content, self.channel = f"<@{BOT_ID}> {text}", FakeChannel()
         self.author = FakeUser(USER_ID, "e2e-selftest", bot=False)
         self.created_at = datetime.now(timezone.utc)
-        self.attachments, self.embeds, self.stickers, self.message_snapshots = [], [], [], []
+        self.attachments = [FakeAttachment(world, path) for path in attachments]
+        self.embeds, self.stickers, self.message_snapshots = [], [], []
         self.reference = self.webhook_id = None
 
     async def reply(self, content=None, **kwargs):
@@ -350,7 +469,11 @@ def configure(world, live, data_dir, socket_path):
         os.environ["ANTHROPIC_BASE_URL"] = os.environ.get("E2E_ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
     else:
         os.environ.update({"ANTHROPIC_BASE_URL": world.url, "ANTHROPIC_API_KEY": "e2e-anthropic-key",
-                           "TYPESAFE_BASE_URL": world.url, "TYPESAFE_API_KEY": "e2e-typesafe-key"})
+                           "TYPESAFE_BASE_URL": world.url, "TYPESAFE_API_KEY": "e2e-typesafe-key",
+                           # Silent speech of a realistic length, so video timing and encoding run for real.
+                           "ELEVENLABS_BASE_URL": world.url, "ELEVENLABS_API_KEY": "e2e-elevenlabs-key",
+                           "ELEVENLABS_VOICE_ID": "e2e-voice", "TTS_PROVIDER": "elevenlabs", "CODEX_IMAGES": "0"})
+        os.environ.pop("LOCAL_SPEECH_SOCKET", None)
     if socket_path:
         os.environ["TOOLS_EXECUTOR_SOCKET"] = socket_path
         os.environ.pop("TOOLS_LOCAL_SANDBOX", None)
@@ -381,7 +504,7 @@ def run_scenario(bot, world, scenario):
     import gateway
     started = len(world.discord), len(world.model_calls), len(world.jev_calls)
     ok_before = tool_ok_calls(scenario["tool"]) if scenario.get("tool") else 0
-    message = FakeMessage(world, scenario["request"])
+    message = FakeMessage(world, scenario["request"], scenario.get("attach") or ())
     clock = time.monotonic()
     asyncio.run(bot.on_message(message))
     # Wait for the job the handler submitted (text and video workers are single-threaded executors).
@@ -413,8 +536,16 @@ def run_scenario(bot, world, scenario):
               status and (status["content"] == expected if expected else status["content"] in strings.values()),
               f"got {status['content'][:80]!r}, expected {expected!r}" if status else "")
         check("final answer delivered", final and final is not status and final["content"].strip(), "status was never replaced")
-        check("no failure message", final and not final["content"].lstrip().startswith("⚠️")
-              and not any(f.split("\n")[0] in final["content"] for f in failures), final["content"][:200] if final else "")
+        refusal = re.search(r"^(?:⚠️|Не удалось|Не могу)|Попробуй (?:ещё раз|уточнить)|^(?:Could not|I can't)", final["content"].strip()) if final else None
+        check("no failure message", final and not refusal and not any(f.split("\n")[0] in final["content"] for f in failures),
+              final["content"][:200] if final else "")
+        if scenario.get("expect") == "video":
+            uploads = [d for d in discord if d.get("media_path")]
+            check("a video was uploaded to the status message", uploads, "no MP4 in the final edit")
+            if uploads:
+                scenario["_media"] = media_info(uploads[-1]["media_path"]) | {"path": uploads[-1]["media_path"]}
+                check("the video is a playable MP4 with sound-length scenes", scenario["_media"]["duration"] > 3,
+                      scenario["_media"])
         if scenario.get("expect") == "text":
             check("text request uploaded no video", not any(d["attachment_bytes"] for d in discord), "an attachment was uploaded")
             if world.hermetic:
@@ -461,6 +592,7 @@ def run_scenario(bot, world, scenario):
                 check("gap has a reusable specification", got["capability"] and json.loads(got["gap"] or "{}").get("summary"),
                       str(got["gap"])[:200])
     return {"scenario": scenario, "seconds": round(elapsed, 2), "status": status, "edits": edits, "final": final,
+            "media": scenario.get("_media"), "tts_calls": len(world.tts_calls),
             "decisions": decisions,
             "extra_parts": extra_parts, "model_calls": world.model_calls[started[1]:],
             "jev_calls": world.jev_calls[started[2]:], "checks": checks}
@@ -570,6 +702,10 @@ def show(result, records):
         print(f"   discord update : {edit['content'][:200]}")
     if result["final"] and result["final"] is not result["status"]:
         print("   discord final  : " + result["final"]["content"][:1500].replace("\n", "\n                    "))
+    if result.get("media"):
+        media = result["media"]
+        print(f"   video          : {media['width']}x{media['height']}, {media['duration']:.1f}s → {media['path']}")
+        print("   frames         : " + ", ".join(media["frames"]))
     for part in result["extra_parts"]:
         print(f"   discord part   : {part['content'][:200]}")
     for name, ok, detail in result["checks"]:
@@ -583,6 +719,7 @@ def main(argv=None):
     parser.add_argument("--live", action="store_true", help="real Messages API (and Jev if TYPESAFE_API_KEY is set)")
     parser.add_argument("--allow-video", action="store_true", help="also run requests that render a video")
     parser.add_argument("--json", action="store_true", help="print the raw observations as JSON")
+    parser.add_argument("--attach", action="append", default=[], help="attach a file to every request (fake Discord CDN)")
     args = parser.parse_args(argv)
     if "pipeline" in sys.modules or "gateway" in sys.modules:
         # Endpoints are read at import time; an already imported bot would talk to the real services.
@@ -605,7 +742,11 @@ def main(argv=None):
 
     import gateway
     from render_modes import response_format
-    scenarios = [{"request": r, "expect": args.expect} for r in args.requests] or DEFAULT_SCENARIOS
+    scenarios = [{"request": r, "expect": args.expect, "attach": args.attach} for r in args.requests] or DEFAULT_SCENARIOS
+    for scenario in scenarios:
+        scenario["attach"] = [sample_picture(data_dir) if a == "sample:picture" else a for a in scenario.get("attach") or []]
+    if any(scenario["attach"] for scenario in scenarios):
+        os.environ["ALLOW_PRIVATE_FETCH"] = "1"  # the fake CDN is on 127.0.0.1
     bot = gateway.ExplainBot("e2e-discord-token")
     bot._connection.user = FakeUser(BOT_ID, "BigBro", bot=True)
     print(f"e2e self-test: {'LIVE Messages API' if args.live else 'hermetic (scripted brain)'}; Discord: fake; tools: {executor}")
@@ -616,7 +757,7 @@ def main(argv=None):
               + (f" — failed: {report['failed']}" if report["failed"] else ""))
     results, ok = [], all(r["passed"] == r["total"] for r in probe["tests"]) and not probe["invalid"]
     for scenario in scenarios:
-        if not args.live and not args.allow_video and scenario.get("expect") != "help" and \
+        if not args.live and not args.allow_video and scenario.get("expect") not in ("help", "video") and \
                 response_format(scenario["request"]) == "video":
             print(f"\n━━ skipped «{scenario['request']}»: renders a video; use --live --allow-video")
             continue

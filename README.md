@@ -656,10 +656,15 @@ End-to-end self-test (run it after every change, see `CLAUDE.md`): the bot sends
 `объясни текстом, …` and the real handler, job pipeline and tool executor process them. Discord REST, the Messages
 API and Jev are local fakes with a deterministic scripted model, so it needs no keys and posts nothing. It prints
 the observed status messages, model phases, tool calls and final answer, and fails on a broken expectation.
+The default scenarios cover text answers with library tools, the shadow router, a photo with `джарвис enhance`
+(a portrait image walkthrough: planning, frame review, silent fake speech of realistic length, real rendering and
+upload; the MP4 and three frames are kept for inspection), and the whole self-learning loop through the forge.
+`--attach FILE` adds a file to your own requests through a fake Discord CDN.
 
 ```bash
 cd container && python e2e_selftest.py                       # default scenarios
 python e2e_selftest.py "объясни текстом, что такое энтропия"  # your own request
+python e2e_selftest.py --expect video --attach photo.jpg "джарвис enhance"   # with an attachment
 docker compose -f compose.gateway.yml exec bot python e2e_selftest.py --live "…"   # real Messages API, fake Discord
 ```
 
