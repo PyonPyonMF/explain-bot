@@ -18,5 +18,15 @@
   {"name": "negative Kelvin is declined even for a same-unit request", "args": {"value": -10, "from_unit": "K", "to_unit": "K"},
    "expect_error": "below_absolute_zero"},
   {"name": "unsupported unit is rejected, never guessed", "args": {"value": 25, "from_unit": "X", "to_unit": "C"},
-   "expect_error": "must be one of"}
+   "expect_error": "must be one of"},
+  {"name": "exact Fahrenheit absolute zero is accepted", "args": {"value": -459.67, "from_unit": "F", "to_unit": "K"},
+   "expect": {"value": 0.0, "unit": "K"}},
+  {"name": "a hair below zero Kelvin is declined, not absorbed as roundoff", "args": {"value": -0.000001, "from_unit": "K", "to_unit": "C"},
+   "expect_error": "below_absolute_zero"},
+  {"name": "a hair below zero Kelvin is declined for a same-unit request too", "args": {"value": -0.000001, "from_unit": "K", "to_unit": "K"},
+   "expect_error": "below_absolute_zero"},
+  {"name": "a hair below absolute zero Celsius is declined", "args": {"value": -273.150001, "from_unit": "C", "to_unit": "F"},
+   "expect_error": "below_absolute_zero"},
+  {"name": "a hair below absolute zero Fahrenheit is declined", "args": {"value": -459.670001, "from_unit": "F", "to_unit": "C"},
+   "expect_error": "below_absolute_zero"}
 ]
