@@ -79,7 +79,7 @@ class Brain:
     def messages(self, body):
         kind, stop, calls = phase(body), "end_turn", []
         if kind == "research":
-            calls = self.date_calls(body)
+            calls = self.date_calls(body) or self.length_calls(body)
             text = "[e2e-brain] Посчитаю даты инструментом." if calls else json.dumps(
                 {"findings": [], "answer_status": "not_needed", "direct_answer": "", "evidence_urls": [],
                  "clarification_required": False, "clarification_question": ""})
@@ -124,6 +124,21 @@ class Brain:
         return [{"type": "tool_use", "id": "toolu_e2e_between", "name": "date_calc",
                  "input": {"operation": "between", "date": today, "other_date": new_year}},
                 {"type": "tool_use", "id": "toolu_e2e_weekday", "name": "date_calc", "input": {"operation": "describe", "date": new_year}}]
+
+    @staticmethod
+    def length_calls(body):
+        """Once the forge-built length_convert is offered, a conversion question uses it instead of mental arithmetic."""
+        offered = {t.get("name") for t in body.get("tools") or []}
+        answered = any(isinstance(b, dict) and b.get("type") == "tool_result"
+                       for m in body.get("messages") or [] if isinstance(m.get("content"), list) for b in m["content"])
+        request = re.search(r"<(request|question)>\s*(.*?)\s*</\1>", user_text(body), re.S)
+        match = request and re.search(r"(\d+(?:[.,]\d+)?)\s*(фут|мил|дюйм)", request[2], re.I)
+        if answered or "length_convert" not in offered or not match:
+            return []
+        unit = {"фут": "ft", "мил": "mi", "дюйм": "in"}[match[2].lower()]
+        target = "km" if unit == "mi" else "cm" if unit == "in" else "m"
+        return [{"type": "tool_use", "id": "toolu_e2e_length", "name": "length_convert",
+                 "input": {"value": float(match[1].replace(",", ".")), "from_unit": unit, "to_unit": target}}]
 
     @staticmethod
     def route(body):
@@ -516,7 +531,10 @@ def learning_loop(bot, world, capture):
     print(f"   merged + git pull → length_convert[{tool['status'] if tool else 'missing'}]: "
           f"{report['passed']}/{report['total']} declarative tests in the executor")
     check("the merged tool is live without a restart", tool and report["passed"] == report["total"] > 0, report)
-    scenario(LOOP_REQUESTS[0], "covered:length_convert")
+    answered = scenario(LOOP_REQUESTS[0], "covered:length_convert")
+    final = (answered.get("final") or {}).get("content", "")
+    check("the bot answered the same request with the new tool", "value=3.048" in final, final[-300:])
+    check("the answer discloses the new (probation) tool", "length_convert" in final and "🧪" in final, final[-200:])
     return {"checks": checks}
 
 
