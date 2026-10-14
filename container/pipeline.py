@@ -223,6 +223,13 @@ def build_user_content(job, images, texts):
     if any(t.startswith("<research_reference") for t in texts):
         from research import RULE
         parts.append(RULE)
+    if job.get("tool_results"):
+        from research import TOOL_RULE
+        for result in job["tool_results"]:
+            # "<" is escaped inside the JSON so tool output cannot close the block.
+            data = json.dumps({"args": result["args"], "output": result["output"]}, ensure_ascii=False).replace("<", "\\u003c")
+            parts.append(f'<tool_result tool="{result["tool"]}" version="{result["digest"]}">\n{data}\n</tool_result>')
+        parts.append(TOOL_RULE)
     if job.get("visual_strategy"):
         parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
     assessment = job.get("research_assessment") or {}
@@ -498,6 +505,12 @@ def source_notices(job):
         notices.append("⚠️ За один запрос распознаётся речь максимум из двух файлов." if BOT_LANG == "ru" else "⚠️ Speech is transcribed from at most two files per request.")
     for error in list(dict.fromkeys((job.get("youtube_errors") or [])+(job.get("media_errors") or [])))[:2]:
         notices.append("⚠️ " + str(error)[:350])
+    trial = list(dict.fromkeys(r["tool"] for r in job.get("tool_results") or [] if r.get("status") == "probation"))
+    if trial:  # A tool still in probation helped with this answer; say so.
+        if BOT_LANG == "ru":
+            notices.append(("-# 🧪 Использован новый инструмент: " if len(trial) == 1 else "-# 🧪 Использованы новые инструменты: ") + ", ".join(trial))
+        else:
+            notices.append(("-# 🧪 Used a new tool: " if len(trial) == 1 else "-# 🧪 Used new tools: ") + ", ".join(trial))
     return notices
 
 

@@ -28,7 +28,7 @@ import urllib.parse
 BOT_ID, USER_ID, CHANNEL_ID = 990000000000000001, 990000000000000002, 990000000000000003
 DEFAULT_SCENARIOS = [
     {"request": "объясни текстом, сколько дней осталось до нового года и какой это будет день недели", "expect": "text",
-     "route": "covered:date_calc"},
+     "route": "covered:date_calc", "tool": "date_calc", "days_to_new_year": True},
     {"request": "ответь текстом: что такое градиентный спуск, в двух абзацах", "expect": "text",
      "route": "covered:wikipedia_summary"},
     {"request": "объясни текстом, как устроены QR-коды, и сгенерируй мне QR-код со ссылкой https://example.com/invite",
@@ -72,10 +72,13 @@ class Brain:
     """Deterministic stand-in for the model: enough to drive every branch the scenarios need."""
 
     def messages(self, body):
-        kind = phase(body)
+        kind, stop, calls = phase(body), "end_turn", []
         if kind == "research":
-            text = json.dumps({"findings": [], "answer_status": "not_needed", "direct_answer": "", "evidence_urls": [],
-                               "clarification_required": False, "clarification_question": ""})
+            calls = self.date_calls(body)
+            text = "[e2e-brain] Посчитаю даты инструментом." if calls else json.dumps(
+                {"findings": [], "answer_status": "not_needed", "direct_answer": "", "evidence_urls": [],
+                 "clarification_required": False, "clarification_question": ""})
+            stop = "tool_use" if calls else stop
         elif kind == "router":
             text = json.dumps(self.route(body))
         elif kind == "text_answer":
@@ -86,11 +89,36 @@ class Brain:
                     f"{dated[1] if dated else 'НЕ ПЕРЕДАНА'}).\n\n"
                     "Это детерминированный ответ тестового мозга: он проверяет маршрут запроса, доставку и формат, "
                     "а не качество объяснения.")
+            quoted = []
+            for tool, data in re.findall(r'<tool_result tool="([^"]+)" version="[^"]+">\s*(.*?)\s*</tool_result>', user_text(body), re.S):
+                output = json.loads(data)["output"]
+                quoted.append(f"{tool}: " + ", ".join(f"{k}={v}" for k, v in output.items()
+                                                       if isinstance(v, (str, int, float)) and not isinstance(v, bool)))
+            if quoted:
+                text += "\n\nПо данным инструментов: " + "; ".join(quoted) + "."
         else:
             text = "[e2e-brain] unexpected phase"
-        return {"id": "msg_e2e", "type": "message", "role": "assistant", "model": body.get("model"), "stop_reason": "end_turn",
-                "content": [{"type": "text", "text": text}],
+        return {"id": "msg_e2e", "type": "message", "role": "assistant", "model": body.get("model"), "stop_reason": stop,
+                "content": [{"type": "text", "text": text}] + calls,
                 "usage": {"input_tokens": len(json.dumps(body)) // 4, "output_tokens": len(text) // 4}}
+
+    @staticmethod
+    def date_calls(body):
+        """Like a model that prefers exact arithmetic: date_calc for a days/weekday question, once, from the request date."""
+        offered = {t.get("name") for t in body.get("tools") or []}
+        answered = any(isinstance(b, dict) and b.get("type") == "tool_result"
+                       for m in body.get("messages") or [] if isinstance(m.get("content"), list) for b in m["content"])
+        request = re.search(r"<(request|question)>\s*(.*?)\s*</\1>", user_text(body), re.S)
+        dated = re.search(r"Date of the request \(UTC\): (\d{4})-(\d\d-\d\d)", user_text(body))
+        if answered or "date_calc" not in offered or not request or not dated or \
+                not re.search(r"дн(?:ей|я)\b|день недели|\bdays?\b|weekday", request[2], re.I):
+            return []
+        today, new_year = f"{dated[1]}-{dated[2]}", f"{int(dated[1]) + 1}-01-01"
+        if not re.search(r"нов(?:ого|ый|ым) год|new year", request[2], re.I):
+            return [{"type": "tool_use", "id": "toolu_e2e_today", "name": "date_calc", "input": {"operation": "describe", "date": today}}]
+        return [{"type": "tool_use", "id": "toolu_e2e_between", "name": "date_calc",
+                 "input": {"operation": "between", "date": today, "other_date": new_year}},
+                {"type": "tool_use", "id": "toolu_e2e_weekday", "name": "date_calc", "input": {"operation": "describe", "date": new_year}}]
 
     @staticmethod
     def route(body):
@@ -180,11 +208,13 @@ class World:
                     return self._reply(200, {"id": message_id, "channel_id": str(CHANNEL_ID)})
                 if path == "/v1/messages" and world.hermetic:
                     request = json.loads(body)
+                    reply = world.brain.messages(request)
                     with world.lock:
                         world.model_calls.append({"phase": phase(request), "model": request.get("model"),
                                                   "tools": [t.get("name") for t in request.get("tools") or []],
-                                                  "chars": len(body), "body": body.decode("utf-8", "replace")})
-                    return self._reply(200, world.brain.messages(request))
+                                                  "chars": len(body), "body": body.decode("utf-8", "replace"),
+                                                  "calls": [b["name"] for b in reply["content"] if b["type"] == "tool_use"]})
+                    return self._reply(200, reply)
                 if path == "/v1/systemone" and world.hermetic:
                     request = json.loads(body)
                     with world.lock:
@@ -297,9 +327,16 @@ def start_executor():
     return path, "in-process executor (test only)"
 
 
+def tool_ok_calls(tool_id):
+    import tool_registry
+    tool = tool_registry.registry().get(tool_id, include_inactive=True)
+    return tool["ok"] if tool else 0
+
+
 def run_scenario(bot, world, scenario):
     import gateway
     started = len(world.discord), len(world.model_calls), len(world.jev_calls)
+    ok_before = tool_ok_calls(scenario["tool"]) if scenario.get("tool") else 0
     message = FakeMessage(world, scenario["request"])
     clock = time.monotonic()
     asyncio.run(bot.on_message(message))
@@ -341,6 +378,26 @@ def run_scenario(bot, world, scenario):
                 check("text answer came from the text-answer stage", "text_answer" in phases, f"phases: {phases}")
                 check("the request date reached the model", final and "НЕ ПЕРЕДАНА" not in final["content"],
                       "relative dates would be computed from the model's training data")
+    if scenario.get("tool"):
+        tool_id, answer = scenario["tool"], final["content"] if final else ""
+        ok_after = tool_ok_calls(tool_id)
+        check(f"{tool_id} ran in the tool executor during research", ok_after > ok_before, f"ok calls {ok_before} -> {ok_after}")
+        if scenario.get("days_to_new_year"):
+            asked = message.created_at.date()
+            days = (asked.replace(year=asked.year + 1, month=1, day=1) - asked).days
+            check(f"the answer contains the computed {days} days", re.search(rf"(?<!\d){days}(?!\d)", answer), answer[-300:])
+        check("the new (probation) tool is disclosed under the answer", re.search(rf"(?m)^-# 🧪 .*\b{tool_id}\b", answer),
+              answer[-300:])
+        if world.hermetic:
+            research = [json.loads(c["body"]) for c in world.model_calls[started[1]:] if c["phase"] == "research"]
+            offered = [t for t in (research[0].get("tools") or [] if research else []) if t.get("name") == tool_id]
+            check(f"research offered {tool_id} with a schema the Messages API accepts", offered and not re.search(
+                r'"(?:minLength|maxLength|minimum|maximum|minItems|maxItems|default)"', json.dumps(offered[0]["input_schema"])),
+                  json.dumps(offered)[:300])
+            returned = [json.loads(b["content"]) for body in research for m in body["messages"] if isinstance(m["content"], list)
+                        for b in m["content"] if b.get("type") == "tool_result"]
+            check("the tool output went back to the research model", returned and all(r.get("outcome") == "ok" for r in returned),
+                  str(returned)[:300])
     if scenario.get("expect") != "help":
         check("router recorded one shadow decision", len(decisions) == 1, f"{len(decisions)} decisions")
         if decisions and scenario.get("route"):
@@ -379,10 +436,11 @@ def tool_probe():
 def show(result, records):
     scenario = result["scenario"]
     print(f"\n━━ request: «{scenario['request']}»  (expect: {scenario.get('expect', '?')}, {result['seconds']}s)")
-    for job_line in [r for r in records if r.name in ("router", "tools", "jev_usage", "claude_usage")]:
+    for job_line in [r for r in records if r.name in ("router", "research", "tools", "jev_usage", "claude_usage")]:
         print(f"   log  {job_line.name}: {job_line.getMessage()[:220]}")
     for call in result["model_calls"]:
-        print(f"   model {call['phase']:<12} tools={call['tools'] or '-'} request={call['chars']} chars")
+        print(f"   model {call['phase']:<12} tools={call['tools'] or '-'} request={call['chars']} chars"
+              + (f" -> tool_use {call['calls']}" if call.get("calls") else ""))
     for call in result["jev_calls"]:
         print(f"   jev   questions={call['questions']} request={call['chars']} chars")
     for decision in result.get("decisions", []):
