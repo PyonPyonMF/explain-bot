@@ -7,12 +7,15 @@ import logging
 import os
 from pathlib import Path
 import re
+import signal
 import threading
+import time
 import urllib.request
 
 import discord
 
 import interactions as I
+import job_journal as J
 from render_modes import mention_mode, response_format, text_task
 
 log = logging.getLogger("gateway")
@@ -253,6 +256,10 @@ class ExplainBot(discord.Client):
         self.slots = threading.BoundedSemaphore(max(0, int(os.environ.get("MAX_QUEUED_JOBS") or 4)) + 1)
         self.renderer = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="render")
         self.text_responder = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="text")
+        # Graceful restart: after SIGTERM no new job starts; running jobs finish, queued ones stay in the journal.
+        self.jobs_lock = threading.Lock()
+        self.running, self.waiting = 0, {}  # waiting: id(job) -> (job, journal key) until a worker starts it
+        self.draining, self.drain_task, self.drain_deadline = False, None, 0.0
 
     async def setup_hook(self):
         app = await asyncio.to_thread(bot_request, self.bot_token, "/applications/@me")
@@ -260,21 +267,91 @@ class ExplainBot(discord.Client):
             raise RuntimeError("Clear Interactions Endpoint URL in Discord Developer Portal before using Gateway mode")
         if os.environ.get("REGISTER_COMMANDS", "1") == "1":
             await asyncio.to_thread(register_commands, self.bot_token, app["id"])
+        # Once per process (on_ready repeats after reconnects); jobs reply over REST, so the Gateway can wait.
+        await asyncio.to_thread(self.resume)
 
     async def on_ready(self):
         log.info("connected to Discord as %s (%s)", self.user, self.user.id)
         log.info("mention commands enabled=%s", self.intents.messages)
 
-    def render(self, job):
+    def resume(self):
         try:
+            J.resume(lambda: self.slots.acquire(blocking=False), self.submit)
+        except Exception:
+            log.exception("could not resume journaled jobs")
+        self.publish()
+
+    def publish(self):
+        J.get().activity(self.running, len(self.waiting), self.draining)
+
+    def render(self, job, key=None):
+        with self.jobs_lock:
+            queued = self.waiting.pop(id(job), None) is not None
+            started = not self.draining
+            self.running += started
+        if not started:
+            if queued:  # Accepted after the drain emptied the queue.
+                self.drop(job, key)
+            return
+        try:
+            self.publish()
+            J.get().start(key)
             from pipeline import handle_job
             handle_job(job)
         finally:
+            J.get().finish(key)
+            with self.jobs_lock:
+                self.running -= 1
+            self.publish()
             self.slots.release()
 
-    def submit(self, job):
+    def submit(self, job, key=None):
+        """Queue a job. Channel-reply jobs are journaled first so that a restart can resume them."""
+        key = key or J.get().record(job)
         worker = self.text_responder if job.get("response_format") == "text" else self.renderer
-        worker.submit(self.render, job)
+        with self.jobs_lock:
+            self.waiting[id(job)] = (job, key)
+        try:
+            worker.submit(self.render, job, key)
+        except Exception:
+            with self.jobs_lock:
+                self.waiting.pop(id(job), None)
+            J.get().finish(key)
+            raise
+        self.publish()
+
+    def drop(self, job, key):
+        """A queued job that will not run in this process. A journaled one resumes after the restart."""
+        if key is None:  # Interaction-token jobs cannot outlive the process.
+            J.abandon(job, J.strings()["restarting"])
+        self.slots.release()
+
+    def cancel_waiting(self):
+        with self.jobs_lock:
+            dropped, self.waiting = list(self.waiting.values()), {}
+        for job, key in dropped:
+            self.drop(job, key)
+        self.publish()
+
+    def request_stop(self):
+        """Signal handler: the first signal drains, a second one stops waiting for running jobs."""
+        if self.drain_task:
+            self.drain_deadline = 0.0
+        else:
+            self.drain_task = asyncio.get_running_loop().create_task(self.drain())
+
+    async def drain(self):
+        with self.jobs_lock:
+            self.draining = True
+        self.drain_deadline = time.monotonic() + float(os.environ.get("DRAIN_TIMEOUT") or 900)
+        log.info("draining before shutdown: %d running, %d waiting", self.running, len(self.waiting))
+        await asyncio.to_thread(self.cancel_waiting)
+        while self.running and time.monotonic() < self.drain_deadline:
+            await asyncio.sleep(0.2)
+        await asyncio.to_thread(self.cancel_waiting)  # Accepted while the drain was waiting.
+        if self.running:
+            log.warning("drain timed out with %d running; journaled jobs resume after restart", self.running)
+        await self.close()
 
     async def on_message(self, message):
         if (not self.intents.messages or not self.user or message.author.bot or message.webhook_id
@@ -320,6 +397,9 @@ class ExplainBot(discord.Client):
                 await reply(mention_strings()["failed"])
             return
 
+        if self.draining:
+            await reply(J.strings()["restarting"])
+            return
         if not self.slots.acquire(blocking=False):
             await reply(I._S()["busy"])
             return
@@ -336,7 +416,7 @@ class ExplainBot(discord.Client):
                 accepted = "research_text"
             status = await reply(mention_strings()[accepted])
             job.update(response_channel_id=str(message.channel.id), response_message_id=str(status.id))
-            self.submit(job)
+            await asyncio.to_thread(self.submit, job)
             submitted = True
         except QuotedMessageUnavailable:
             await reply(mention_strings()["unavailable"])
@@ -359,10 +439,11 @@ class ExplainBot(discord.Client):
         if interaction.type not in (discord.InteractionType.application_command, discord.InteractionType.modal_submit,
                                     discord.InteractionType.component):
             return
-        reserved = []
+        reserved, refused = [], []
 
         def reserve(job):
-            if not self.slots.acquire(blocking=False):
+            if self.draining or not self.slots.acquire(blocking=False):
+                refused.append(job)
                 return False
             reserved.append(job)
             return True
@@ -372,6 +453,8 @@ class ExplainBot(discord.Client):
             code, response = await asyncio.to_thread(I.handle, payload(interaction), reserve)
             if code != 200:
                 response = {"type": I.CHANNEL_MESSAGE, "data": {"content": "Unsupported command.", "flags": I.EPHEMERAL}}
+            if refused and self.draining:
+                response = {"type": I.CHANNEL_MESSAGE, "data": {"content": J.strings()["restarting"], "flags": I.EPHEMERAL}}
             if (interaction.data or {}).get("name") == "objects":
                 query = str(I._option(payload(interaction), "query") or "")[:200]
                 if query:
@@ -387,7 +470,7 @@ class ExplainBot(discord.Client):
                         return
             await respond(interaction, response)
             for job in reserved[:]:
-                self.submit(job)
+                await asyncio.to_thread(self.submit, job)
                 reserved.remove(job)
         except Exception:
             # Avoid logging payloads, which contain interaction tokens and user content.
@@ -422,7 +505,22 @@ def main():
     if missing:
         raise SystemExit("Missing required settings: " + ", ".join(missing))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    ExplainBot(os.environ["DISCORD_BOT_TOKEN"].strip()).run(os.environ["DISCORD_BOT_TOKEN"].strip(), log_handler=None)
+    token = os.environ["DISCORD_BOT_TOKEN"].strip()
+    bot = ExplainBot(token)
+    asyncio.run(serve(bot, token))
+    if bot.running:  # Drain timed out: render threads would block exit; the journal resumes their jobs.
+        logging.shutdown()
+        os._exit(0)
+
+
+async def serve(bot, token):
+    # Client.run() installs no SIGTERM handler, and as PID 1 in a container an unhandled SIGTERM is ignored
+    # until Docker sends SIGKILL. Handle it on the loop so that a stop drains instead.
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, bot.request_stop)
+    async with bot:
+        await bot.start(token)
 
 
 if __name__ == "__main__":

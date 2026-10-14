@@ -440,6 +440,33 @@ Run only one Gateway instance for this bot token. The renderer processes one vid
 Logs: `docker compose -f compose.gateway.yml logs -f bot`.
 Update: `git pull --ff-only && docker compose -f compose.gateway.yml up -d --build`.
 
+### Restarts and deploys
+
+On `docker compose stop`/`up -d --build` the bot drains instead of dropping work. After SIGTERM it accepts no new
+jobs and replies "⚠️ Бот перезапускается. Повтори запрос через минуту." Running jobs may finish for up to
+`DRAIN_TIMEOUT` seconds (900); `stop_grace_period: 16m` in `compose.gateway.yml` covers that. A second signal
+stops at once.
+
+Mention jobs reply by editing the bot's own status message with the bot token, so they can outlive the process.
+They are journaled in `DATA_DIR/jobs.sqlite` (mode 0600) when accepted and deleted when they finish. After a restart
+the bot sets their status to "♻️ Бот перезапускался — продолжаю работу над запросом…" and queues them again ahead
+of new requests, without charging the daily limit again. A job interrupted mid-render counts as one attempt.
+Jobs that were started `JOB_MAX_ATTEMPTS` times (2), are older than `JOB_RESUME_MAX_AGE` seconds (6 h), or no
+longer fit the queue are dropped. Their status asks the user to resend, and their quota is returned. The journal
+keeps only the request snapshot taken at acceptance. Saved follow-up memory is stored by reference to `bot.sqlite`.
+Interaction tokens, API credentials, downloaded inputs and generated animation code are never written.
+Slash/context-command jobs depend on a 15-minute interaction token, so they are not journaled. If such a job is
+still waiting when the bot stops, its user is asked to resend and the quota is returned.
+
+```bash
+docker compose -f compose.gateway.yml exec bot python -m job_journal status     # counts only, no contents
+docker compose -f compose.gateway.yml exec bot python -m job_journal wait-idle --timeout 900 && \
+  docker compose -f compose.gateway.yml up -d --build   # optional: deploy between jobs
+```
+
+`status` prints journaled jobs by state, plus the running/waiting counts of the live process, which include
+slash-command jobs. `wait-idle` exits 0 once no job is running, and 1 on timeout.
+
 ### Codex illustration worker (Linux)
 
 Install Codex CLI and sign in with ChatGPT under the account that will run the worker. Image generation uses

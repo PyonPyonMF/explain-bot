@@ -90,6 +90,13 @@ class State:
             self.db.commit()
             return True
 
+    def refund_quota(self, user):
+        """Return one use of today's quota for a job that was refused or dropped before it could run."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        with self.lock:
+            self.db.execute("UPDATE quota SET n=MAX(0, n-1) WHERE user=? AND day=?", (str(user), day))
+            self.db.commit()
+
     def put_form(self, key, value):
         now = time.time()
         with self.lock:
@@ -293,5 +300,7 @@ def handle(i, enqueue):
         return _ephemeral(S["limit"].format(limit))
     job["quota_paid"] = limit > 0
     if not enqueue(job):
+        if job["quota_paid"]:
+            state().refund_quota(user)
         return _ephemeral(S["busy"])
     return _reply({"type": DEFERRED, "data": {"flags": EPHEMERAL} if private else {}})
