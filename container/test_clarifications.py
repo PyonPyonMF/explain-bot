@@ -44,10 +44,11 @@ class ClarificationTests(unittest.TestCase):
 
     def test_vague_and_conflicting_requests_get_choices_without_changing_clear_defaults(self):
         for request in ("", "разбери это", "сделай что-нибудь", "текстом или видео", "объясни или сделай резюме",
-                        "покажи что тут говорят текстом", "options"):
+                        "options"):
             self.assertIsNotNone(C.reason(request), request)
         for request in ("объясни градиентный спуск", "explain this", "градиент", "кто тут прав?", "why?",
-                        "объясни что тут говорят текстом", "summarize видео", "сделай транскрипцию видео текстом",
+                        "объясни что тут говорят текстом", "покажи что тут говорят текстом", "что за макароны дай рецепт текстом",
+                        "summarize видео", "сделай транскрипцию видео текстом",
                         "https://x.com/example/status/1", "3d маятник", "Объясни разницу между текстом и видео",
                         "Не объясняй текстом, сделай видео"):
             self.assertIsNone(C.reason(request), request)

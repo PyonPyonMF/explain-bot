@@ -46,11 +46,22 @@ Finish with ONE JSON object:
 "answer_status":"ready|partial|ambiguous|not_found|not_needed|refused",
 "direct_answer":"concise direct answer to the actual question, or the supported part; no generic filler",
 "evidence_urls":["observed sources supporting the direct answer"],
+"clarification_required":false,
 "clarification_question":"one specific missing detail or source to ask the user for, if needed"}
 At most 6 findings. ready means the central question is answered, not merely that background facts exist.
 Judge sufficiency against what was ASKED. If 'what is this group?' is answered by relevant primary evidence,
 do not mark it partial merely because an unrequested full roster, charter, founding date or complete history
 was not found. Ask only for details necessary to answer the current question, not an optional 'want more?' follow-up.
+Set clarification_required=true ONLY when a missing USER detail prevents a useful answer to the actual request.
+Otherwise set it false and leave clarification_question empty. A partial answer may still be useful without
+another user turn: state what is supported and its limits, instead of requesting optional specificity.
+For an image of food plus 'what is this, give me a recipe', describe the visible dish with appropriate uncertainty
+and offer a practical recipe for that dish. Do not require the episode, restaurant, brand or an official recipe
+unless the user explicitly asked for that exact provenance. Distinguish a suggested recipe from a verified
+canonical recipe. Do not invent an official recipe, exact ingredients hidden from view or unsupported provenance.
+The same applies to ordinary examples, explanations and instructions grounded in supplied material: an optional
+detail is not a prerequisite. If the central identification or relationship is truly unresolved, ask for the
+necessary detail; a plausible guess about an obscure entity is not a supported answer.
 partial means some relevant facts are known but the requested relationship/cause is not established. ambiguous
 means the intended entity/context is unresolved. not_found means the performed search did not answer it;
 describe only the limits of this search, never assert universal absence of public information. not_needed is
@@ -166,6 +177,14 @@ def needs_lookup(job):
                 or re.search(r"(?:forum|forums)\.[\w.-]+", request, re.I))
 
 
+def blocks_answer(assessment):
+    """Partial evidence alone is not a reason to demand another user turn."""
+    status = assessment.get("status")
+    if status == "partial" and assessment.get("clarification_required") is False and assessment.get("direct_answer"):
+        return False
+    return status in ("ambiguous", "not_found", "partial", "refused")
+
+
 def web_research(job, images, texts):
     """Findings as [{"url", "title", "summary"}]; [] when research is off or unavailable."""
     if os.environ.get("WEB_RESEARCH", "1") != "1":
@@ -217,6 +236,14 @@ def web_research(job, images, texts):
             status = "partial" if out else "not_found"
         job["research_assessment"] = {"status": status, "direct_answer": direct, "evidence_urls": evidence,
                                       "question": clean(parsed.get("clarification_question"), 400), **stats}
+        if isinstance(parsed.get("clarification_required"),bool):
+            required = parsed["clarification_required"]
+            # A failed mandatory public lookup cannot be waived by a model's optional-question flag.
+            if needs_lookup(job) and not evidence:
+                required = True
+            job["research_assessment"]["clarification_required"] = required
+            if not required:
+                job["research_assessment"]["question"] = ""
     elif needs_lookup(job):
         job["research_assessment"] = {"status": "partial" if out else "not_found", "direct_answer": "",
                                       "question": "Уточни сообщество, период или дай ссылку на первоисточник.", **stats}

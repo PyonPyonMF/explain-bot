@@ -38,8 +38,11 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   API credentials and generated animation code are not stored. For older videos without saved narration,
   the bot tries to recover the original request and clearly marks that narration unavailable to the model.
 - Add `объясни текстом` (also `обьясни текстом` or `ответь текстом`) to any request to receive a text answer
-  without video generation, TTS or generated illustrations. This works for new questions and follow-ups;
-  the explicit bot mention is still required. Long text is delivered in multiple messages without cutting
+  without video generation, TTS or generated illustrations. This works for new questions and follow-ups.
+  Ordinary commands such as `дай рецепт текстом`, `опиши картинку текстом` and `составь план текстом` work too.
+  Optional provenance or a more exact variant does not block a useful answer to the actual request: for example,
+  a suggested recipe from a food image does not require an episode number unless the user asks for the exact original.
+  The explicit bot mention is still required. Long text is delivered in multiple messages without cutting
   off the answer. Replies to any part retain the same context. Each new request selects its own format:
   without an explicit text request, the bot makes a video again. Text requests have a separate worker so
   they do not wait for an active video render, while sharing the total queue and daily request limit.

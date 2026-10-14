@@ -73,6 +73,38 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(job["assets"], [{"id": "visual_1"}])
         self.assertEqual(job["research"], [])
 
+    def test_food_image_gets_a_complete_text_answer_without_optional_episode_question(self):
+        from unittest.mock import Mock
+        import text_answers as T
+        job={"kind":"query","text":"что за макароны дай рецепт текстом","response_format":"text","text_task":"explain"}
+        images=[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"eA=="}}]
+        assessment={"answer_status":"partial","direct_answer":"Похоже на спагетти с фрикадельками; можно предложить домашний вариант.",
+                    "clarification_required":False,"clarification_question":"Нужен точный рецепт из конкретной серии?", "findings":[]}
+        answer=Mock(return_value="Домашний вариант: ингредиенты и шаги.")
+        with patch.object(research,"ask",return_value=(json.dumps(assessment),{})), \
+             patch("followups.prepare",return_value=(images,[],[])),patch.object(T,"answer",answer), \
+             patch.object(T,"deliver") as deliver,patch.object(pipeline,"_safe_text"),patch("clarifications.create") as picker:
+            pipeline.handle_job(job)
+        self.assertFalse(job['research_assessment']['clarification_required'])
+        self.assertEqual(job['research_assessment']['question'],"")
+        self.assertEqual(job['prepared_inputs'][0],images)
+        answer.assert_called_once();deliver.assert_called_once();picker.assert_not_called()
+        _,context=pipeline.build_user_content(job,images,[])
+        self.assertIn('Preserve uncertainty',context)
+
+    def test_optional_flag_cannot_bypass_missing_identity_evidence(self):
+        job={"kind":"query","text":"кто такой RareHandle"}
+        parsed={"answer_status":"partial","direct_answer":"An unverified guess.","clarification_required":False,"findings":[]}
+        with patch.object(research,"ask",return_value=(json.dumps(parsed),{})):
+            research.web_research(job,[],[])
+        self.assertTrue(job['research_assessment']['clarification_required'])
+        self.assertTrue(research.blocks_answer(job['research_assessment']))
+        self.assertTrue(research.blocks_answer({'status':'ambiguous','direct_answer':'Guess','clarification_required':False}))
+
+    def test_partial_without_an_explicit_sufficiency_decision_stays_blocked(self):
+        for required in (None,True,'false'):
+            self.assertTrue(research.blocks_answer({'status':'partial','direct_answer':'Some context','clarification_required':required}))
+
 
 if __name__ == "__main__":
     unittest.main()

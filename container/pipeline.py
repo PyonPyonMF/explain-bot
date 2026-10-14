@@ -213,6 +213,11 @@ def build_user_content(job, images, texts):
     if assessment.get("status") == "ready" and assessment.get("direct_answer"):
         parts.append("Verified answer to the current question; center the explanation on this, not on background or alternate meanings:\n"
                      + assessment["direct_answer"])
+    elif assessment.get("status") == "partial" and assessment.get("clarification_required") is False and assessment.get("direct_answer"):
+        parts.append("Useful but limited source/research assessment for the current question:\n"+assessment["direct_answer"]+
+                     "\nAnswer the user's actual request from the supplied evidence. Preserve uncertainty and distinguish a "
+                     "suggested example or recipe from an exact verified original. No additional user detail is required; "
+                     "do not stop for optional provenance or offer a clarification instead of the requested answer.")
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
     return images, "\n\n".join(parts)
 
@@ -516,7 +521,7 @@ def discord_video(job, path, title, debug=""):
 
 def prepare_sources(job, images, texts, workdir, visuals_on=True):
     """Resolve the actual answer before planning visuals; otherwise a guessed topic can contaminate the video."""
-    from research import web_research, needs_lookup
+    from research import web_research, needs_lookup, blocks_answer
     try:
         if job.get("conversation_analysis") or job.get("primary_youtube") or job.get("primary_x_video"):
             checked = []
@@ -532,7 +537,7 @@ def prepare_sources(job, images, texts, workdir, visuals_on=True):
     job["research"] = checked
     for ref in checked:
         texts.append(f"<research_reference url=\"{ref['url']}\">\n{ref['title']}: {ref['summary']}\n</research_reference>")
-    blocked = (job.get("research_assessment") or {}).get("status") in ("ambiguous", "not_found", "partial", "refused")
+    blocked = blocks_answer(job.get("research_assessment") or {})
     extras = []
     if visuals_on and not blocked and not job.get("conversation_analysis"):
         try:
@@ -555,7 +560,8 @@ def request_missing_context(job):
         return True
     if job.get("conversation_analysis"):
         return False
-    if assessment.get("status") not in ("ambiguous", "not_found", "partial"):
+    from research import blocks_answer
+    if not blocks_answer(assessment):
         return False
     if (assessment.get("status") == "partial" and not assessment.get("question") and
             assessment.get("direct_answer") and assessment.get("evidence_urls")):
