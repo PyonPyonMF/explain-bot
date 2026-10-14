@@ -24,6 +24,7 @@ MENTION_STRINGS = {
         "attachment": "Объясни содержание приложенного материала.",
         "followup": "🎬 Сделаю ещё одно видео с ответом на уточнение…",
         "text": "💬 Отвечу текстом…",
+        "image": "🖼️ Сгенерирую картинку через Codex ImageGen…",
         "transcript": "📝 Сделаю текстовую расшифровку речи…",
         "summary": "📝 Расшифрую речь и подготовлю краткое резюме…",
         "research": "🔎 Начинаю глубокое исследование. Соберу хронологию и версии сторон, затем сделаю видео с озвучкой…",
@@ -39,6 +40,7 @@ MENTION_STRINGS = {
         "attachment": "Explain the content of the attached material.",
         "followup": "🎬 I'll make another video answering your follow-up…",
         "text": "💬 I'll answer in text…",
+        "image": "🖼️ I'll generate an image with Codex ImageGen…",
         "transcript": "📝 I'll transcribe the speech into text…",
         "summary": "📝 I'll transcribe the speech and prepare a short summary…",
         "research": "🔎 Starting deep research. I'll turn the chronology and competing accounts into a narrated video…",
@@ -331,7 +333,7 @@ class ExplainBot(discord.Client):
                 await reply(I._S()["limit"].format(limit))
                 return
             job["quota_paid"] = limit > 0
-            accepted = job["text_task"] if job.get("text_task") in ("transcript", "summary", "research") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
+            accepted = "image" if job.get("response_format")=="image" else job["text_task"] if job.get("text_task") in ("transcript", "summary", "research") else "text" if job.get("response_format") == "text" else "followup" if job.get("followup") else "accepted"
             if accepted == "research" and job.get("response_format") == "text":
                 accepted = "research_text"
             status = await reply(mention_strings()[accepted])

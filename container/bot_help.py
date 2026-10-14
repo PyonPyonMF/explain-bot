@@ -40,6 +40,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 {intro}
 
 • **Объяснять темы в видео с озвучкой:** `объясни, как работает градиентный спуск`.
+• **Генерировать картинки:** `сгенерируй картинку + описание` — Codex ImageGen. Ответь так на мой результат, чтобы взять его тему.
 • **Отвечать текстом:** `объясни что тут говорят текстом`.
 • **Расшифровывать речь:** `сделай транскрипцию видео текстом` — слова с таймкодами.
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
@@ -150,6 +151,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 {intro}
 
 • **Narrated explainers:** `explain gradient descent` — video by default.
+• **Generate images:** `generate an image + description` uses Codex ImageGen. Reply to my result to use its subject.
 • **Text answers:** `explain in text why this works`.
 • **Speech transcripts:** `transcribe this video` — recognized words with timestamps and speaker labels.
 • **Summaries:** `summarize this video` — key points from the speech, not the full transcript.

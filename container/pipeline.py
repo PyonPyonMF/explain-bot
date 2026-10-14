@@ -32,6 +32,8 @@ DISCORD_BASE = os.environ.get("DISCORD_API_BASE", "https://discord.com/api/v10")
 
 STRINGS = {
     "ru": {"failed": "⚠️ Не получилось сделать видео. Попробуй ещё раз позже.",
+           "image_failed": "⚠️ Не получилось сгенерировать картинку через Codex ImageGen. Попробуй ещё раз позже.",
+           "p_image": "🖼️ Генерирую картинку через Codex ImageGen…",
            "text_failed": "⚠️ Не получилось подготовить ответ текстом. Попробуй ещё раз или уточни вопрос.",
            "p_text": "💬 Читаю материал и готовлю ответ текстом…",
            "p_transcript": "📝 Готовлю текстовую расшифровку речи…",
@@ -42,6 +44,8 @@ STRINGS = {
            "p_write": "✍️ Пишу сценарий и анимацию…", "p_review": "🔎 Проверяю кадры (раунд {})…",
            "p_render": "🎬 Рендерю видео…"},
     "en": {"failed": "⚠️ Could not make the video. Try again later.",
+           "image_failed": "⚠️ Could not generate the image with Codex ImageGen. Try again later.",
+           "p_image": "🖼️ Generating an image with Codex ImageGen…",
            "text_failed": "⚠️ Could not prepare the text answer. Try again or narrow the question.",
            "p_text": "💬 Reading the material and preparing a text answer…",
            "p_transcript": "📝 Preparing the speech transcript…",
@@ -612,6 +616,12 @@ def handle_job(job):
         job["response_format"] = "text"
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
+        if job.get("response_format")=="image":
+            from image_answers import make_image,deliver
+            _safe_text(job,S["p_image"])
+            data,description=make_image(job,workdir)
+            deliver(job,data,description)
+            return
         if job["text_task"] == "research":
             from deep_research import answer as investigate
             from text_answers import deliver
@@ -699,7 +709,7 @@ def handle_job(job):
         _safe_text(job, str(e))
     except Exception as e:
         log.exception("job failed")
-        msg = S["text_failed" if job.get("response_format") == "text" else "failed"]
+        msg = S["image_failed" if job.get("response_format")=="image" else "text_failed" if job.get("response_format") == "text" else "failed"]
         if os.environ.get("DEBUG_ERRORS") == "1":  # show the reason in Discord while setting up the bot
             ver = (os.environ.get("CODE_VERSION") or "?")[:8]
             msg += f"\n```[{ver}] {type(e).__name__}: {str(e)[:400]}```"
