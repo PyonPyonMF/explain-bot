@@ -1,0 +1,28 @@
+{
+  "api": 1,
+  "id": "temperature_convert",
+  "title": "Temperature conversion",
+  "description": "Converts an exact temperature between Celsius, Fahrenheit and Kelvin using the standard formulas (C = K - 273.15, F = C * 9/5 + 32), offline and deterministic. Declines any input colder than absolute zero (-273.15 C, -459.67 F, 0 K), even when the source and target unit are the same. Returns the converted value rounded to 6 decimal places.",
+  "when_not_to_use": "Weather forecasts or real-world temperature readings, non-SI scales such as Rankine or Reaumur, temperature differences/deltas, heat index or wind chill, and unit conversions that are not temperature.",
+  "examples": [
+    "сколько градусов Фаренгейта в 25 градусах Цельсия?",
+    "convert 451 F to C",
+    "переведи 0 K в градусы Цельсия",
+    "what is -40 Celsius in Fahrenheit?",
+    "сколько Кельвинов в абсолютном нуле по Фаренгейту?"
+  ],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "value": {"type": "number", "minimum": -1000000, "maximum": 1000000,
+                "description": "the temperature to convert, expressed in from_unit"},
+      "from_unit": {"type": "string", "enum": ["C", "F", "K"], "description": "unit of value: Celsius, Fahrenheit or Kelvin"},
+      "to_unit": {"type": "string", "enum": ["C", "F", "K"], "description": "unit to convert into: Celsius, Fahrenheit or Kelvin"}
+    },
+    "required": ["value", "from_unit", "to_unit"],
+    "additionalProperties": false
+  },
+  "output_description": "value (the converted temperature, rounded to 6 decimal places) and unit (the target unit, one of C/F/K).",
+  "network": [],
+  "limits": {"timeout_s": 5, "memory_mb": 64, "max_output_chars": 200}
+}
