@@ -579,6 +579,17 @@ cd container && pip install -r requirements.txt
 python test_local.py sample_plan.json out.mp4   # fake audio, real renderer
 ```
 
+End-to-end self-test (run it after every change, see `CLAUDE.md`): the bot sends itself mentions such as
+`объясни текстом, …` and the real handler, job pipeline and tool executor process them. Discord REST, the Messages
+API and Jev are local fakes with a deterministic scripted model, so it needs no keys and posts nothing. It prints
+the observed status messages, model phases, tool calls and final answer, and fails on a broken expectation.
+
+```bash
+cd container && python e2e_selftest.py                       # default scenarios
+python e2e_selftest.py "объясни текстом, что такое энтропия"  # your own request
+docker compose -f compose.gateway.yml exec bot python e2e_selftest.py --live "…"   # real Messages API, fake Discord
+```
+
 ## Limits and known problems
 
 - Discord's interaction token expires after 15 minutes; a job that takes longer cannot post its video.
