@@ -13,6 +13,18 @@ from render_modes import response_format
 import text_answers as T
 
 
+class RequestDateTests(unittest.TestCase):
+    def test_relative_dates_use_the_request_date_not_the_model_cutoff(self):
+        query = {"kind": "query", "text": "сколько дней до нового года?", "message": {"timestamp": "2026-12-31T23:30:00-02:00"}}
+        _, context = pipeline.build_user_content(query, [], [])
+        self.assertIn("Date of the request (UTC): 2027-01-01", context)
+        # A reply to an older post is dated by the request, not by the quoted post.
+        reply = {"kind": "message", "question": "это когда было?", "message": {"timestamp": "2020-05-01T10:00:00+00:00"},
+                 "request_message": {"timestamp": "2026-10-14T08:00:00+00:00"}}
+        self.assertIn("2026-10-14", pipeline.build_user_content(reply, [], [])[1])
+        self.assertRegex(pipeline.build_user_content({"kind": "query", "text": "x"}, [], [])[1], r"\(UTC\): \d{4}-\d{2}-\d{2}")
+
+
 class FormatTests(unittest.TestCase):
     def test_format_can_follow_the_question_in_natural_word_order(self):
         for text in ["объясни что тут говорят текстом", "обьясни что тут говорят текстом",

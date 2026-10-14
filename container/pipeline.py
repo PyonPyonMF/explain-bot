@@ -1,5 +1,6 @@
 """Job pipeline: Sonnet plan -> ElevenLabs voice per scene -> render -> Discord."""
 import concurrent.futures as cf
+from datetime import datetime, timezone
 import http.client
 import json
 import logging
@@ -157,6 +158,16 @@ def _retry(fn, what, attempts=4):
 
 
 # ---------------------------------------------------------------- Claude
+def request_date(job):
+    """The UTC date the user asked, so "today", "until new year" etc. are not computed from training-data dates."""
+    source = job.get("request_message") or (job.get("message") if job.get("kind") != "message" else None) or {}
+    try:
+        stamp = datetime.fromisoformat(str(source.get("timestamp")))
+    except ValueError:
+        stamp = datetime.now(timezone.utc)
+    return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).date().isoformat()
+
+
 def build_user_content(job, images, texts):
     import followups
     parts = [followups.prompt(job)] if job.get("followup") else [DOCUMENT_RULE] if job.get("primary_document") else []
@@ -223,6 +234,7 @@ def build_user_content(job, images, texts):
                      "\nAnswer the user's actual request from the supplied evidence. Preserve uncertainty and distinguish a "
                      "suggested example or recipe from an exact verified original. No additional user detail is required; "
                      "do not stop for optional provenance or offer a clarification instead of the requested answer.")
+    parts.append(f"Date of the request (UTC): {request_date(job)}")
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
     return images, "\n\n".join(parts)
 
