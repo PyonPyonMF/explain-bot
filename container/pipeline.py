@@ -622,6 +622,11 @@ def handle_job(job):
     job.setdefault("text_task", text_task(job.get("question") or job.get("text") or ""))
     if job["text_task"] in ("transcript", "summary"):
         job["response_format"] = "text"
+    try:
+        import router
+        router.observe(job)  # Shadow mode: records which capability would answer; never changes or delays this job.
+    except Exception:
+        log.exception("capability router unavailable")
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
         if job["text_task"] == "research":

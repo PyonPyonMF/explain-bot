@@ -324,6 +324,28 @@ For local development without the `tools` service, `TOOLS_LOCAL_SANDBOX=1` runs 
 the bot container instead; that mode has no network boundary and is not meant for production. Without either
 the executor socket or that switch, tools are unavailable. Cloudflare Containers mode does not load tools.
 
+### Capability router (shadow mode)
+
+With `ROUTER_SHADOW=1` every request is also routed in the background, without changing or delaying the answer:
+`builtin` (the existing pipeline can answer), `covered` (a library tool would make the answer exact), `gap` (a
+capability is missing), `impossible` (private data, credentials, access bypass, harm) or `clarify`. Gaps are
+grouped into a backlog of reusable tool specifications that the tool forge will build from.
+
+- **Cascade.** When `TYPESAFE_API_KEY` is set, Jev (TypeSafe AI's System One decision model) chooses between the
+  library tools, the builtin pipeline, a gap and an impossible request, with calibrated probabilities. A choice at or
+  above `JEV_ROUTER_CONFIDENCE` (default 0.8) is final. Uncertain choices, possible gaps, and builtin choices that
+  Jev itself rates as needing exact computation, live data or an action go to the Messages API (`ROUTER_EFFORT`,
+  default `low`) with a strict JSON schema, which also writes the gap specification. Without Jev, every decision
+  uses the Messages API. The tool catalog is part of the cached instructions; the request is not.
+- **Minimized input.** Routing sees only the requester's own words with links reduced to their host
+  (`<link:example.com>`), the kinds of attachments, the requested format and the request date — never other
+  people's posts, names, link paths or query strings. Jev is a third-party processor: leave its key empty to keep
+  routing on the Anthropic API only.
+- **Backlog.** `/data/router.sqlite` (mode 0600, 30 days, at most 5000 decisions) stores verdicts, sources and
+  confidences. The request text (at most 300 characters) is kept only for `gap`, `impossible` and `clarify`, where
+  an operator must review it. `python -m router backlog` lists missing capabilities by demand with their latest
+  specification; `python -m router decisions [--show-requests]` lists recent decisions.
+
 ### Optional Windows GPU worker
 
 With `THREED_REMOTE=1`, an available personal computer renders 1080p Eevee scenes with 32 samples, soft

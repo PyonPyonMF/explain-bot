@@ -27,8 +27,13 @@ import urllib.parse
 
 BOT_ID, USER_ID, CHANNEL_ID = 990000000000000001, 990000000000000002, 990000000000000003
 DEFAULT_SCENARIOS = [
-    {"request": "объясни текстом, сколько дней осталось до нового года и какой это будет день недели", "expect": "text"},
-    {"request": "ответь текстом: что такое градиентный спуск, в двух абзацах", "expect": "text"},
+    {"request": "объясни текстом, сколько дней осталось до нового года и какой это будет день недели", "expect": "text",
+     "route": "covered:date_calc"},
+    {"request": "ответь текстом: что такое градиентный спуск, в двух абзацах", "expect": "text",
+     "route": "covered:wikipedia_summary"},
+    {"request": "объясни текстом, как устроены QR-коды, и сгенерируй мне QR-код со ссылкой https://example.com/invite",
+     "expect": "text", "route": "gap"},
+    {"request": "объясни текстом, почему кошки мурлыкают", "expect": "text", "route": "builtin"},
     {"request": "помощь", "expect": "help"},
 ]
 
@@ -89,10 +94,20 @@ class Brain:
 
     @staticmethod
     def route(body):
-        """The router answers with the first tool whose examples share words with the request, else no tool."""
-        catalog = re.findall(r'"id":\s*"([a-z0-9_]+)"', system_text(body) + user_text(body))
-        return {"verdict": "covered" if catalog else "not_needed", "tools": catalog[:1], "confidence": 0.6,
-                "gap": None, "reason": "e2e brain"}
+        """Keyword stand-in for System Two: a gap for artifacts/actions, a tool whose examples overlap, else builtin."""
+        state = json.loads(re.search(r"<request_description>\s*(.*?)\s*</request_description>", user_text(body), re.S)[1])
+        request = state["request"].casefold()
+        tools = [json.loads(line) for line in re.findall(r"^\{.*\}$", system_text(body), re.M)]
+        if re.search(r"qr|напомни|напоминани|remind|mp3", request):
+            return {"verdict": "gap", "tools": [], "confidence": 0.9, "reason": "e2e brain: an artifact the bot cannot make",
+                    "gap": {"capability": "QR code", "summary": "Generate a QR code image for a URL or text.",
+                            "inputs": "text or URL, size", "outputs": "PNG image", "category": "conversion",
+                            "example_requests": ["сделай QR-код для ссылки", "qr code for this text"], "network_hosts": []}}
+        words = set(re.findall(r"\w{4,}", request))
+        best = max(tools, key=lambda t: len(words & set(re.findall(r"\w{4,}", " ".join(t["examples"]).casefold()))), default=None)
+        if best and len(words & set(re.findall(r"\w{4,}", " ".join(best["examples"]).casefold()))) >= 2:
+            return {"verdict": "covered", "tools": [best["id"]], "confidence": 0.8, "reason": "e2e brain", "gap": None}
+        return {"verdict": "builtin", "tools": [], "confidence": 0.85, "reason": "e2e brain", "gap": None}
 
     @staticmethod
     def jev(body):
@@ -105,6 +120,7 @@ class Brain:
                 scores = [1 + len(words & set(re.findall(r"\w{4,}", json.dumps(question["criteria"][label] or label,
                                                                                 ensure_ascii=False).casefold())))
                           for label in labels]
+                scores = [score ** 3 for score in scores]  # decisive, like a calibrated model on clear cases
                 total = sum(scores)
                 best = max(range(len(labels)), key=scores.__getitem__)
                 answers[name] = {"type": "choice", "choice": labels[best], "confidence": round(scores[best] / total, 3),
@@ -167,12 +183,13 @@ class World:
                     with world.lock:
                         world.model_calls.append({"phase": phase(request), "model": request.get("model"),
                                                   "tools": [t.get("name") for t in request.get("tools") or []],
-                                                  "chars": len(body)})
+                                                  "chars": len(body), "body": body.decode("utf-8", "replace")})
                     return self._reply(200, world.brain.messages(request))
                 if path == "/v1/systemone" and world.hermetic:
                     request = json.loads(body)
                     with world.lock:
-                        world.jev_calls.append({"questions": list(request.get("questions") or {}), "chars": len(body)})
+                        world.jev_calls.append({"questions": list(request.get("questions") or {}), "chars": len(body),
+                                                "body": body.decode("utf-8", "replace")})
                     return self._reply(200, world.brain.jev(request))
                 self._reply(404, {})
 
@@ -250,7 +267,8 @@ def configure(world, live, data_dir, socket_path):
     os.environ.update({"DISCORD_API_BASE": world.url + "/api/v10", "DISCORD_BOT_TOKEN": "e2e-discord-token",
                        "DATA_DIR": data_dir, "TOOLS_DIR": str(Path(__file__).resolve().parent.parent / "tools")
                        if (Path(__file__).resolve().parent.parent / "tools").is_dir() else os.environ.get("TOOLS_DIR", "/tools"),
-                       "REGISTER_COMMANDS": "0", "DAILY_LIMIT": "0", "BOT_LANG": os.environ.get("BOT_LANG") or "ru"})
+                       "REGISTER_COMMANDS": "0", "DAILY_LIMIT": "0", "BOT_LANG": os.environ.get("BOT_LANG") or "ru",
+                       "ROUTER_SHADOW": "1"})
     if live:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise SystemExit("--live needs ANTHROPIC_API_KEY")
@@ -288,7 +306,10 @@ def run_scenario(bot, world, scenario):
     # Wait for the job the handler submitted (text and video workers are single-threaded executors).
     for pool in (bot.text_responder, bot.renderer):
         pool.submit(lambda: None).result(timeout=float(os.environ.get("E2E_TIMEOUT") or 600))
+    import router
+    router.wait_idle(120)
     elapsed = time.monotonic() - clock
+    decisions = [d for d in router.backlog().recent(50) if d["id"] > scenario.get("_after_decision", 0)]
     discord = world.discord[started[0]:]
     strings = gateway.mention_strings()
     status = next((d for d in discord if d["op"] == "post"), None)
@@ -320,7 +341,26 @@ def run_scenario(bot, world, scenario):
                 check("text answer came from the text-answer stage", "text_answer" in phases, f"phases: {phases}")
                 check("the request date reached the model", final and "НЕ ПЕРЕДАНА" not in final["content"],
                       "relative dates would be computed from the model's training data")
+    if scenario.get("expect") != "help":
+        check("router recorded one shadow decision", len(decisions) == 1, f"{len(decisions)} decisions")
+        if decisions and scenario.get("route"):
+            verdict, _, tool = scenario["route"].partition(":")
+            got = decisions[0]
+            check(f"router verdict is {scenario['route']}",
+                  got["verdict"] == verdict and (not tool or tool in json.loads(got["tools"])),
+                  f"got {got['verdict']} {got['tools']} via {got['source']}")
+            check("request text stored only for gaps", (got["request"] is not None) == (got["verdict"] in ("gap", "impossible", "clarify")),
+                  f"verdict {got['verdict']} stored={got['request'] is not None}")
+            paths = [urllib.parse.urlsplit(u).path for u in re.findall(r"https?://\S+", scenario["request"])]
+            routed = [c["body"] for c in world.model_calls[started[1]:] if c["phase"] == "router"]
+            routed += [c["body"] for c in world.jev_calls[started[2]:]]
+            check("routing saw link hosts, not link paths", not any(p and p in body for p in paths for body in routed),
+                  f"paths {paths} reached the router")
+            if got["verdict"] == "gap":
+                check("gap has a reusable specification", got["capability"] and json.loads(got["gap"] or "{}").get("summary"),
+                      str(got["gap"])[:200])
     return {"scenario": scenario, "seconds": round(elapsed, 2), "status": status, "edits": edits, "final": final,
+            "decisions": decisions,
             "extra_parts": extra_parts, "model_calls": world.model_calls[started[1]:],
             "jev_calls": world.jev_calls[started[2]:], "checks": checks}
 
@@ -345,6 +385,11 @@ def show(result, records):
         print(f"   model {call['phase']:<12} tools={call['tools'] or '-'} request={call['chars']} chars")
     for call in result["jev_calls"]:
         print(f"   jev   questions={call['questions']} request={call['chars']} chars")
+    for decision in result.get("decisions", []):
+        jev = json.loads(decision["jev"]) if decision["jev"] else None
+        print(f"   router {decision['verdict']} via {decision['source']} confidence={decision['confidence']:.2f} "
+              f"tools={json.loads(decision['tools']) or '-'}" + (f" capability={decision['capability']}" if decision["capability"] else "")
+              + (f" | jev: {jev['choice']} p={jev['confidence']:.2f} exact={jev['exact']}" if jev else ""))
     if result["status"]:
         print(f"   discord status : {result['status']['content'][:200]}")
     for edit in result["edits"][:-1]:
@@ -401,6 +446,8 @@ def main(argv=None):
             print(f"\n━━ skipped «{scenario['request']}»: renders a video; use --live --allow-video")
             continue
         mark = len(capture.records)
+        import router
+        scenario["_after_decision"] = max([d["id"] for d in router.backlog().recent(1)] or [0])
         result = run_scenario(bot, world, scenario)
         results.append(result)
         show(result, capture.records[mark:])
