@@ -46,6 +46,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Делать резюме:** `summarize видео` — краткие тезисы по речи, без полной расшифровки.
 • **Исследовать форум:** `/research` или `рисерч: вопрос + ссылка` — видео с хронологией, версиями сторон и выводами.
 • **Разбирать картинки, схемы и GIF:** прикрепи материал или ответь на сообщение с ним. Для картинок могу сделать вертикальное видео с приближениями и выносками.
+• **Улучшать фото:** `джарвис enhance`, `улучши фото`, `раскрась это фото` с картинкой — генеративная реконструкция через Codex (детали дорисованы моделью).
 • **Читать материалы:** PDF, текст и код, веб-страницы, треды и статьи X, Telegram и Reddit. Видео YouTube и X — по речи; кадры только по просьбе `разбери покадрово`.
 • **Отвечать на уточнения:** ответь на мой результат с упоминанием и новым вопросом. Без упоминания я не вмешиваюсь.
 • **Показывать 3D:** `3d объясни, почему качается маятник`. `/objects` — библиотека 3D-объектов.
@@ -81,6 +82,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 Прикрепи материал и упомяни меня {mention}; можно добавить вопрос или ответить на уже отправленный файл.
 
 • **Фото, скриншоты, схемы и графики:** объясню изображение; в видео могу приближать детали, добавлять подсветку и выноски.
+• **Улучшение фото:** `enhance`, `улучши фото`, `апскейл`, `раскрась` — верну улучшенную картинку с пометкой, что детали дорисованы генератором.
 • **GIF и стикеры:** смотрю последовательность кадров вместе с контекстом сообщения.
 • **PDF:** читаю текст и до 4 страниц-превью. До 10 МиБ, 60 страниц и 120 000 символов. Скан без текстового слоя пока не читается.
 • **Текст и код:** можно вставить прямо в сообщение или приложить поддерживаемый текстовый файл.
@@ -157,6 +159,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 • **Summaries:** `summarize this video` — key points from the speech, not the full transcript.
 • **Deep research:** `/research` or `research: question + forum URL` — a narrated video with a timeline, competing accounts and conclusions.
 • **Pictures, diagrams and GIFs:** attach a source or reply to it. Image explanations can use portrait zooms and callouts.
+• **Photo enhancement:** `jarvis, enhance`, `upscale`, `colorize this photo` with a picture — a generative reconstruction via Codex (detail is drawn by the model).
 • **Sources:** PDFs, text/code, web pages, X threads/articles, Telegram and Reddit. YouTube speech is transcribed; frames require an explicit frame-by-frame request.
 • **Follow-ups:** reply to my result with my mention and your next question. No mention means no automatic reply.
 • **3D:** `3d explain a pendulum`; `/objects` browses reusable 3D objects.
@@ -187,6 +190,7 @@ When ElevenLabs is unavailable, local speech needs the home computer online. Loc
 Attach a source and mention me {mention}, or reply to its message.
 
 • Photos, screenshots, diagrams and charts: visual explanations, with zooms and callouts where useful.
+• Photo enhancement: `enhance`, `upscale`, `colorize` — an improved picture, labeled as generated detail.
 • GIFs and stickers: sampled frames plus conversation context.
 • PDFs: text and up to four page previews; up to 10 MiB, 60 pages and 120,000 text characters. Scans need a text layer.
 • Text and code: paste them or attach a supported text file.

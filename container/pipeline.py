@@ -1,5 +1,6 @@
 """Job pipeline: Sonnet plan -> ElevenLabs voice per scene -> render -> Discord."""
 import concurrent.futures as cf
+from datetime import datetime, timezone
 import http.client
 import json
 import logging
@@ -161,6 +162,16 @@ def _retry(fn, what, attempts=4):
 
 
 # ---------------------------------------------------------------- Claude
+def request_date(job):
+    """The UTC date the user asked, so "today", "until new year" etc. are not computed from training-data dates."""
+    source = job.get("request_message") or (job.get("message") if job.get("kind") != "message" else None) or {}
+    try:
+        stamp = datetime.fromisoformat(str(source.get("timestamp")))
+    except ValueError:
+        stamp = datetime.now(timezone.utc)
+    return (stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).date().isoformat()
+
+
 def build_user_content(job, images, texts):
     import followups
     parts = [followups.prompt(job)] if job.get("followup") else [DOCUMENT_RULE] if job.get("primary_document") else []
@@ -216,6 +227,13 @@ def build_user_content(job, images, texts):
     if any(t.startswith("<research_reference") for t in texts):
         from research import RULE
         parts.append(RULE)
+    if job.get("tool_results"):
+        from research import TOOL_RULE
+        for result in job["tool_results"]:
+            # "<" is escaped inside the JSON so tool output cannot close the block.
+            data = json.dumps({"args": result["args"], "output": result["output"]}, ensure_ascii=False).replace("<", "\\u003c")
+            parts.append(f'<tool_result tool="{result["tool"]}" version="{result["digest"]}">\n{data}\n</tool_result>')
+        parts.append(TOOL_RULE)
     if job.get("visual_strategy"):
         parts.append("Visual communication plan (design guidance, not factual evidence): " + job["visual_strategy"])
     assessment = job.get("research_assessment") or {}
@@ -227,6 +245,7 @@ def build_user_content(job, images, texts):
                      "\nAnswer the user's actual request from the supplied evidence. Preserve uncertainty and distinguish a "
                      "suggested example or recipe from an exact verified original. No additional user detail is required; "
                      "do not stop for optional provenance or offer a clarification instead of the requested answer.")
+    parts.append(f"Date of the request (UTC): {request_date(job)}")
     parts.append(f"User's Discord locale: {job.get('locale') or 'unknown'}")
     return images, "\n\n".join(parts)
 
@@ -490,11 +509,34 @@ def source_notices(job):
         notices.append("⚠️ За один запрос распознаётся речь максимум из двух файлов." if BOT_LANG == "ru" else "⚠️ Speech is transcribed from at most two files per request.")
     for error in list(dict.fromkeys((job.get("youtube_errors") or [])+(job.get("media_errors") or [])))[:2]:
         notices.append("⚠️ " + str(error)[:350])
+    trial = list(dict.fromkeys(r["tool"] for r in job.get("tool_results") or [] if r.get("status") == "probation"))
+    if trial:  # A tool still in probation helped with this answer; say so.
+        if BOT_LANG == "ru":
+            notices.append(("-# 🧪 Использован новый инструмент: " if len(trial) == 1 else "-# 🧪 Использованы новые инструменты: ") + ", ".join(trial))
+        else:
+            notices.append(("-# 🧪 Used a new tool: " if len(trial) == 1 else "-# 🧪 Used new tools: ") + ", ".join(trial))
     return notices
 
 
-def discord_video(job, path, title, debug=""):
+def discord_file(job, path, filename, content_type, content):
+    """Replace the status message with content and one attached file."""
     boundary = uuid.uuid4().hex
+    payload = {"content": content[:1900], "allowed_mentions": {"parse": []}, "attachments": [{"id": 0, "filename": filename}]}
+    with open(path, "rb") as f:
+        data = f.read()
+    parts = [
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n".encode()
+        + json.dumps(payload).encode() + b"\r\n",
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n".encode()
+        + data + b"\r\n",
+        f"--{boundary}--\r\n".encode(),
+    ]
+    body = b"".join(parts)
+    headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
+    _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
+
+
+def discord_video(job, path, title, debug=""):
     content = f"**{title}**" + (f"\n{debug}" if debug else "")
     if job.get("followup") and not job.get("research_video") and (job.get("video_script") or {}).get("excerpt"):
         content += "\n\n" + job["video_script"]["excerpt"]
@@ -507,20 +549,7 @@ def discord_video(job, path, title, debug=""):
             if len(content) + len(line) + 2 > 1900:
                 break
             content += "\n\n" + line
-    payload = {"content": content[:1900], "allowed_mentions": {"parse": []},
-               "attachments": [{"id": 0, "filename": "explain.mp4"}]}
-    with open(path, "rb") as f:
-        video = f.read()
-    parts = [
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n".encode()
-        + json.dumps(payload).encode() + b"\r\n",
-        f"--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"explain.mp4\"\r\nContent-Type: video/mp4\r\n\r\n".encode()
-        + video + b"\r\n",
-        f"--{boundary}--\r\n".encode(),
-    ]
-    body = b"".join(parts)
-    headers = _discord_headers(job, f"multipart/form-data; boundary={boundary}")
-    _retry(lambda: _http(_discord_url(job), body, headers, method="PATCH", timeout=180), "discord upload")
+    discord_file(job, path, "explain.mp4", "video/mp4", content)
     try:
         from followups import remember
         remember(job)
@@ -614,8 +643,20 @@ def handle_job(job):
     job.setdefault("text_task", text_task(job.get("question") or job.get("text") or ""))
     if job["text_task"] in ("transcript", "summary"):
         job["response_format"] = "text"
+    try:
+        import router
+        router.observe(job)  # Shadow mode: records which capability would answer; never changes or delays this job.
+    except Exception:
+        log.exception("capability router unavailable")
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
+        if job.get("response_format") == "image" and job.get("text_task") == "enhance":
+            import image_enhance
+            from followups import prepare
+            job["context_messages"] = 0  # the photo of this message or its reply, never one from unrelated chat
+            images, texts, notes = job["prepared_inputs"] = prepare(job, collect)
+            image_enhance.run(job, images, workdir)  # restore the same picture, not generate a new one
+            return
         if job.get("response_format")=="image":
             from image_answers import make_image,deliver
             _safe_text(job,S["p_image"])

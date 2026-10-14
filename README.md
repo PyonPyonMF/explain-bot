@@ -104,7 +104,8 @@ Videos can use actual image references instead of drawing every object with geom
   (`SEARXNG_URL`). Sonnet looks at the candidates and keeps only images that actually show the subject,
   describing each one for the scene writer.
 - Before the script is written, Sonnet checks the facts the explanation relies on with Anthropic's server-side
-  web search (`web_search` / `web_fetch` tools, same API key), before visual preparation. Up to six
+  web search (`web_search` / `web_fetch` tools, same API key) and the library tools (see "Tool library"),
+  before visual preparation. Up to six
   findings reach the script with their sources; a finding is dropped unless its URL actually came back from
   the search tools. The sources are listed under the video. `WEB_RESEARCH=0` turns this off;
   `RESEARCH_MAX_SEARCHES` caps the billed searches per video. Web search must be allowed for the organization
@@ -150,6 +151,15 @@ Videos can use actual image references instead of drawing every object with geom
   diagnostic labels do not become facts, and an unprovable side allegation does not block the supported answer.
   Missing-source clarification previews end at sentence/word boundaries.
 - A host-side Codex CLI worker generates one detailed illustration when useful and can research source pages.
+- **Photo enhancement.** `джарвис enhance`, `улучши фото`, `сделай чётче`, `апскейл`, `восстанови старое фото` or
+  `раскрась это фото` with an attached (or replied-to) picture returns an improved picture instead of an explanation.
+  The same host Codex worker runs in `enhance` mode: it edits from the photo and is told to keep the same picture
+  (composition, subjects, identities, objects, visible text, black-and-white stays black-and-white unless
+  colorization was asked) and to improve only resolution, sharpness, noise and damage. Only the photo and the colorize
+  flag are sent, never the request text. The reply is labeled as a generative reconstruction — added detail is
+  plausible, not recovered — and shows the size change. Results larger than `MAX_UPLOAD_MB` become JPEG and, only if
+  needed, smaller. Questions about the words ("что такое upscale") stay explanations. `IMAGE_ENHANCE=0` disables it;
+  without the worker the bot says that enhancement is unavailable.
 - Sonnet chooses the representation for the explanation: recognizable imagery for appearance/structure,
   sequences or animated diagrams for processes/phenomena, and computed plots for quantitative relationships.
   Frames are reviewed for explanatory accuracy and clarity; irrelevant decoration is not required.
@@ -298,6 +308,116 @@ cost. `THREED_FPS`, `THREED_WIDTH`, `THREED_HEIGHT`, `THREED_SAMPLES`, `THREED_M
 failure is reported as a failure; it is not silently replaced by a 2D clip. Generated Blender code runs as
 the unprivileged sandbox user with API credentials removed, with auto-execution from model files disabled.
 
+### Tool library (self-extending capabilities)
+
+The bot keeps a library of small, single-purpose tools in `tools/<id>/`. A tool is data plus one sandboxed
+function, so a newly merged tool becomes available after `git pull` on the server, without rebuilding the image
+or restarting the bot (the registry rescans every `TOOLS_RESCAN` seconds, default 30).
+
+```
+tools/date_calc/manifest.json   id, description and examples (for routing), input_schema, network hosts, limits
+tools/date_calc/tool.py         def run(args, ctx) -> dict
+tools/date_calc/tests.json      declarative cases: args, network fixtures, expected output paths or errors
+```
+
+- **Isolation.** Tool code never runs in the bot process. In Compose it runs in the separate `tools` service:
+  no network (`network_mode: none`), no credentials (it refuses to start if any `*_KEY`/`*_TOKEN`/`*_SECRET` is
+  set), no data volumes, a read-only filesystem, no capabilities, as the unprivileged `sandbox` user. Each call
+  lowers its own limits before tool code loads: memory, CPU time, file size, open files, and no child processes.
+  The bot sends the exact source it registered (a later edit on disk cannot change a running version) and the
+  validated arguments; tool output is untrusted data.
+- **Network through a broker.** `ctx.fetch(url)` is performed by the bot: plain `https` only, only hosts declared
+  in the manifest (`*.domain` allowed), public addresses only (redirects included), bounded count, size and time.
+- **Bounded inputs.** `input_schema` is a strict JSON Schema subset that also works as a Claude tool definition:
+  every object closes `additionalProperties`, every string has `maxLength` or `enum`, every array `maxItems`;
+  `pattern` is rejected so an untrusted regular expression is never evaluated by the trusted process.
+- **Versions and trust.** Each distinct content digest is a version with its own state in `/data/tools.sqlite`:
+  `probation` (new), `stable`, `suspended`, `archived`, `superseded`. A changed tool starts again in probation and
+  never inherits its predecessor's statistics. Calls are counted as `ok`, `declined` (an expected failure the
+  tool reported with `ctx.fail`) or `failed` (crash, timeout, protocol or limit violation).
+- **Tests are data.** `tests.json` cases run the tool in the sandbox with fixture responses instead of the
+  network; the trusted process checks the expectations, so no generated test code is executed.
+- **Answers use the tools.** The research step that runs before every text explanation and video script offers
+  the active tools as client tools next to web search and the forum tools, sorted by id: the manifest
+  description, its "Not for:" text, a note that the output is untrusted, and the input schema without the bounds
+  the Messages API does not take for tools (`minLength`, `maximum`, `default`, … move into the property
+  descriptions; the runtime still validates the full schema). Above `TOOLS_DEFER_AFTER` (default 8) active tools
+  their definitions are deferred behind the server-side tool search tool (BM25); web and forum tools always stay
+  loaded. Calls run through the executor, at most four client operations per step and only while the research
+  deadline leaves room; rejected arguments return the problems as an error the model can correct. Up to six
+  successful outputs reach the script or text answer as `<tool_result tool="…" version="…">` data blocks with a
+  rule to prefer them over memory for exact values; they are never put in a system prompt or logged. An answer
+  that used a tool still in probation says so in a `-# 🧪` line under the answer or the video.
+- **Automatic lifecycle.** Each recorded call re-evaluates its version. Probation becomes `stable` after
+  `TOOLS_PROMOTE_AFTER` (default 20) calls of which at least 95% were `ok` or `declined`. Probation or stable
+  becomes `suspended` after `TOOLS_SUSPEND_AFTER_FAILURES` (default 3) consecutive failures, or when more than
+  30% of at least 5 calls failed. Only a failure can suspend and only a success can promote; `0` turns the
+  promotion or the streak rule off. Status changes are logged with the tool id and digest only. Operator
+  `promote`/`restore` still apply; they start a new failure streak but keep the totals, so a restored version
+  whose failure ratio is still above 30% is suspended again by its next failure.
+
+Operator commands (`docker compose -f compose.gateway.yml exec bot python -m tool_registry …`): `list`,
+`show <id>`, `test <id>`, `run <id> '<json args>'`, `promote <id>` (stable), `suspend <id>`, `archive <id>`,
+`restore <id>`, and `check <dir>…` (validates directories without a database, for review/CI).
+
+For local development without the `tools` service, `TOOLS_LOCAL_SANDBOX=1` runs calls as the `sandbox` user in
+the bot container instead; that mode has no network boundary and is not meant for production. Without either
+the executor socket or that switch, tools are unavailable. Cloudflare Containers mode does not load tools.
+
+### Capability router (shadow mode)
+
+With `ROUTER_SHADOW=1` every request is also routed in the background, without changing or delaying the answer:
+`builtin` (the existing pipeline can answer), `covered` (a library tool would make the answer exact), `gap` (a
+capability is missing), `impossible` (private data, credentials, access bypass, harm) or `clarify`. Gaps are
+grouped into a backlog of reusable tool specifications that the tool forge will build from.
+
+- **Cascade.** When `TYPESAFE_API_KEY` is set, Jev (TypeSafe AI's System One decision model) chooses between the
+  library tools, the builtin pipeline, a gap and an impossible request, with calibrated probabilities. A choice at or
+  above `JEV_ROUTER_CONFIDENCE` (default 0.8) is final. Uncertain choices, possible gaps, and builtin choices that
+  Jev itself rates as needing exact computation, live data or an action go to the Messages API (`ROUTER_EFFORT`,
+  default `low`) with a strict JSON schema, which also writes the gap specification. Without Jev, every decision
+  uses the Messages API. The tool catalog is part of the cached instructions; the request is not.
+- **Minimized input.** Routing sees only the requester's own words with links reduced to their host
+  (`<link:example.com>`), the kinds of attachments, the requested format and the request date — never other
+  people's posts, names, link paths or query strings. Jev is a third-party processor: leave its key empty to keep
+  routing on the Anthropic API only.
+- **Backlog.** `/data/router.sqlite` (mode 0600, 30 days, at most 5000 decisions) stores verdicts, sources and
+  confidences. The request text (at most 300 characters) is kept only for `gap`, `impossible` and `clarify`, where
+  an operator must review it. `python -m router backlog` lists missing capabilities by demand with their latest
+  specification; `python -m router decisions [--show-requests]` lists recent decisions.
+
+### Tool forge (the bot builds its missing tools)
+
+The router's backlog drives a forge that writes new library tools, with a person approving and reviewing:
+
+1. **Demand.** When a missing capability has been requested `FORGE_MIN_REQUESTS` times (default 2) in 30 days,
+   the bot sends `FORGE_OWNER_ID` a direct message with the specification (never the users' requests) and
+   **Build** / **Ignore** buttons. Only the owner can decide; each card is decided once.
+2. **Build.** Build writes the specification to the forge queue. `scripts/tool_forge.py` (host service
+   `deploy/explain-bot-forge.service`) takes a fresh git worktree and runs Claude Code headless as the builder:
+   `--restricted`, `--permission-mode dontAsk`, file tools confined to the worktree, web search/fetch for API
+   documentation, and **no shell** — prefix-matched Bash rules are not a security boundary.
+3. **Gates.** The forge, not the builder, runs `container/tool_gates.py` in the bot image with `--network none`:
+   manifest contract; code rules (allow-listed imports only; no `open`/`eval`/`exec`/`getattr`, dunder attributes,
+   format-string attribute access or global state); scope (network hosts within the specification, a new id, and
+   files under `tools/<id>/` only); at least 4 own test cases including an expected failure; and **hidden tests**
+   written by a second, separate Claude Code run that sees the specification, the manifest and the builder's tests as
+   a format reference, never the code. Failures go back to the builder for up to `FORGE_REPAIR_ROUNDS` (3) rounds.
+   These rules are defense in depth; the sandbox, the executor without network and the broker remain the boundary.
+4. **Pull request.** A passing tool is pushed to `tools/<id>` and opened as a pull request with the
+   specification, gate results and a review checklist; the owner's card links it. The GitHub token is used only by
+   the forge process and never reaches the builders. After a human merges it, `git pull` on the server loads the
+   tool in probation without a rebuild or restart.
+
+Setup on the server: create a `forge` account in the `docker` group and log it into Claude Code (or set
+`FORGE_ANTHROPIC_API_KEY`); clone the repository to `/var/lib/explain-bot-forge/repo`; create
+`/var/lib/explain-bot-forge/queue` owned by `forge` and set `FORGE_UID`/`FORGE_GID` to its ids; put
+`FORGE_GITHUB_REPO=owner/repo` and a fine-grained `FORGE_GITHUB_TOKEN` (contents and pull requests on this repository
+only) in `/etc/explain-bot-forge.env` (mode 0600); install the unit. `FORGE_BUDGET_USD` (default 5) caps each Claude
+Code run, `FORGE_TIMEOUT` (1800 s) bounds it, `FORGE_MODEL` selects its model. Operators can queue a backlog entry
+without the card (`python -m forge_queue propose <capability>`), list proposals (`list`) and gate any tool directory
+(`python3 scripts/tool_forge.py test tools/<id>`).
+
 ### Optional Windows GPU worker
 
 With `THREED_REMOTE=1`, an available personal computer renders 1080p Eevee scenes with 32 samples, soft
@@ -414,6 +534,33 @@ Run only one Gateway instance for this bot token. The renderer processes one vid
 Logs: `docker compose -f compose.gateway.yml logs -f bot`.
 Update: `git pull --ff-only && docker compose -f compose.gateway.yml up -d --build`.
 
+### Restarts and deploys
+
+On `docker compose stop`/`up -d --build` the bot drains instead of dropping work. After SIGTERM it accepts no new
+jobs and replies "⚠️ Бот перезапускается. Повтори запрос через минуту." Running jobs may finish for up to
+`DRAIN_TIMEOUT` seconds (900); `stop_grace_period: 16m` in `compose.gateway.yml` covers that. A second signal
+stops at once.
+
+Mention jobs reply by editing the bot's own status message with the bot token, so they can outlive the process.
+They are journaled in `DATA_DIR/jobs.sqlite` (mode 0600) when accepted and deleted when they finish. After a restart
+the bot sets their status to "♻️ Бот перезапускался — продолжаю работу над запросом…" and queues them again ahead
+of new requests, without charging the daily limit again. A job interrupted mid-render counts as one attempt.
+Jobs that were started `JOB_MAX_ATTEMPTS` times (2), are older than `JOB_RESUME_MAX_AGE` seconds (6 h), or no
+longer fit the queue are dropped. Their status asks the user to resend, and their quota is returned. The journal
+keeps only the request snapshot taken at acceptance. Saved follow-up memory is stored by reference to `bot.sqlite`.
+Interaction tokens, API credentials, downloaded inputs and generated animation code are never written.
+Slash/context-command jobs depend on a 15-minute interaction token, so they are not journaled. If such a job is
+still waiting when the bot stops, its user is asked to resend and the quota is returned.
+
+```bash
+docker compose -f compose.gateway.yml exec bot python -m job_journal status     # counts only, no contents
+docker compose -f compose.gateway.yml exec bot python -m job_journal wait-idle --timeout 900 && \
+  docker compose -f compose.gateway.yml up -d --build   # optional: deploy between jobs
+```
+
+`status` prints journaled jobs by state, plus the running/waiting counts of the live process, which include
+slash-command jobs. `wait-idle` exits 0 once no job is running, and 1 on timeout.
+
 ### Codex illustration worker (Linux)
 
 Install Codex CLI and sign in with ChatGPT under the account that will run the worker. Image generation uses
@@ -524,6 +671,22 @@ each review round 1–2 min, render 1–2 min. Discord allows 15 minutes.
 ```bash
 cd container && pip install -r requirements.txt
 python test_local.py sample_plan.json out.mp4   # fake audio, real renderer
+```
+
+End-to-end self-test (run it after every change, see `CLAUDE.md`): the bot sends itself mentions such as
+`объясни текстом, …` and the real handler, job pipeline and tool executor process them. Discord REST, the Messages
+API and Jev are local fakes with a deterministic scripted model, so it needs no keys and posts nothing. It prints
+the observed status messages, model phases, tool calls and final answer, and fails on a broken expectation.
+The default scenarios cover text answers with library tools, the shadow router, a photo with `джарвис enhance`
+(a portrait image walkthrough: planning, frame review, silent fake speech of realistic length, real rendering and
+upload; the MP4 and three frames are kept for inspection), and the whole self-learning loop through the forge.
+`--attach FILE` adds a file to your own requests through a fake Discord CDN.
+
+```bash
+cd container && python e2e_selftest.py                       # default scenarios
+python e2e_selftest.py "объясни текстом, что такое энтропия"  # your own request
+python e2e_selftest.py --expect video --attach photo.jpg "джарвис enhance"   # with an attachment
+docker compose -f compose.gateway.yml exec bot python e2e_selftest.py --live "…"   # real Messages API, fake Discord
 ```
 
 ## Limits and known problems

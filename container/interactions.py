@@ -90,6 +90,13 @@ class State:
             self.db.commit()
             return True
 
+    def refund_quota(self, user):
+        """Return one use of today's quota for a job that was refused or dropped before it could run."""
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        with self.lock:
+            self.db.execute("UPDATE quota SET n=MAX(0, n-1) WHERE user=? AND day=?", (str(user), day))
+            self.db.commit()
+
     def put_form(self, key, value):
         now = time.time()
         with self.lock:
@@ -227,6 +234,9 @@ def handle(i, enqueue):
     if t in (MESSAGE_COMPONENT, MODAL_SUBMIT) and str(d.get("custom_id") or "").startswith("clarify:"):
         from clarifications import handle as clarify
         return clarify(i, enqueue, state())
+    if t == MESSAGE_COMPONENT and str(d.get("custom_id") or "").startswith("forge:"):
+        from forge_queue import handle as forge
+        return forge(i)
     if t == APPLICATION_COMMAND and d.get("type") == CHAT_INPUT and d.get("name") == "help":
         from bot_help import help_text
         return _reply({"type": CHANNEL_MESSAGE, "data": {
@@ -293,5 +303,7 @@ def handle(i, enqueue):
         return _ephemeral(S["limit"].format(limit))
     job["quota_paid"] = limit > 0
     if not enqueue(job):
+        if job["quota_paid"]:
+            state().refund_quota(user)
         return _ephemeral(S["busy"])
     return _reply({"type": DEFERRED, "data": {"flags": EPHEMERAL} if private else {}})

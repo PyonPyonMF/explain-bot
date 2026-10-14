@@ -5,16 +5,28 @@ services:
     build: ./container
     command: ["python", "gateway.py"]
     restart: unless-stopped
+    # On stop/redeploy the bot drains: running jobs finish (DRAIN_TIMEOUT, default 900 s) and queued ones resume
+    # after the restart. Keep this longer than DRAIN_TIMEOUT, or Docker kills the container mid-render.
+    stop_grace_period: 16m
     depends_on:
       - pot
+      - tools
     env_file: .env
     environment:
       DATA_DIR: /data
       CODE_VERSION: ${CODE_VERSION:-gateway}
       RENDER_WORKERS: ${RENDER_WORKERS:-2}
       YOUTUBE_POT_URL: http://pot:4416
+      TOOLS_DIR: /tools
+      TOOLS_EXECUTOR_SOCKET: /tool-socket/executor.sock
+      FORGE_QUEUE: /forge-queue
     volumes:
       - ./data:/data
+      # Tool library from this checkout: a merged tool appears after `git pull`, without a rebuild or restart.
+      - ./tools:/tools:ro
+      - tool-socket:/tool-socket
+      # Approved capability specifications for the host-side tool forge (scripts/tool_forge.py).
+      - ${FORGE_QUEUE_HOST:-/var/lib/explain-bot-forge/queue}:/forge-queue
       - ${CODEX_VISUAL_QUEUE_HOST:-/var/lib/explain-bot-visuals/queue}:/visual-queue
       - ./models3d:/models3d:ro
       - ./library3d:/library3d
@@ -25,6 +37,32 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+  # Runs library tools: no network, no credentials (env_file is deliberately absent), no data volumes.
+  # The bot brokers every fetch a tool makes, limited to the hosts in its manifest.
+  tools:
+    build: ./container
+    command: ["python", "tool_executor.py"]
+    restart: unless-stopped
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    pids_limit: 64
+    cpus: 1
+    environment:
+      TOOLS_EXECUTOR_SOCKET: /tool-socket/executor.sock
+      TOOLS_EXECUTOR_CONCURRENCY: "2"
+    volumes:
+      - tool-socket:/tool-socket
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
   pot:
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     restart: unless-stopped
@@ -38,3 +76,5 @@ services:
       options:
         max-size: "5m"
         max-file: "2"
+volumes:
+  tool-socket:

@@ -1,0 +1,25 @@
+[
+  {"name": "reads a summary",
+   "args": {"title": "Градиентный спуск", "language": "ru"},
+   "fixtures": {"https://ru.wikipedia.org/api/rest_v1/page/summary/%D0%93%D1%80%D0%B0%D0%B4%D0%B8%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B9_%D1%81%D0%BF%D1%83%D1%81%D0%BA?redirect=true":
+     {"json": {"type": "standard", "title": "Градиентный спуск", "description": "метод оптимизации",
+               "extract": "Градиентный спуск — метод нахождения локального минимума функции с помощью движения вдоль антиградиента.",
+               "content_urls": {"desktop": {"page": "https://ru.wikipedia.org/wiki/%D0%93%D1%80%D0%B0%D0%B4%D0%B8%D0%B5%D0%BD%D1%82%D0%BD%D1%8B%D0%B9_%D1%81%D0%BF%D1%83%D1%81%D0%BA"}}}}},
+   "expect": {"title": "Градиентный спуск", "disambiguation": false},
+   "expect_contains": {"extract": "антиградиента", "url": "https://ru.wikipedia.org/wiki/"}},
+  {"name": "marks disambiguation pages",
+   "args": {"title": "Mercury", "language": "en"},
+   "fixtures": {"https://en.wikipedia.org/api/rest_v1/page/summary/Mercury?redirect=true":
+     {"json": {"type": "disambiguation", "title": "Mercury", "extract": "Mercury may refer to:"}}},
+   "expect": {"disambiguation": true, "url": ""}},
+  {"name": "missing article is declined",
+   "args": {"title": "Nonexistent article xyz", "language": "en"},
+   "fixtures": {"https://en.wikipedia.org/api/rest_v1/page/summary/Nonexistent_article_xyz?redirect=true":
+     {"status": 404, "json": {"type": "https://mediawiki.org/wiki/HyperSwitch/errors/not_found"}}},
+   "expect_error": "not_found"},
+  {"name": "foreign links are dropped",
+   "args": {"title": "Test", "language": "en"},
+   "fixtures": {"https://en.wikipedia.org/api/rest_v1/page/summary/Test?redirect=true":
+     {"json": {"type": "standard", "title": "Test", "extract": "x", "content_urls": {"desktop": {"page": "https://evil.example/"}}}}},
+   "expect": {"url": ""}}
+]
