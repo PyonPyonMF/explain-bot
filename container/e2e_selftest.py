@@ -55,8 +55,13 @@ from pathlib import Path
 from PIL import Image, ImageFilter
 args, prompt = sys.argv[1:], sys.stdin.read()
 home = Path(os.environ["CODEX_HOME"])
+reference_pixels = []
+for index, argument in enumerate(args):
+    if argument == "--image":
+        with Image.open(args[index + 1]) as reference:
+            reference_pixels.append(list(reference.convert("RGBA").getpixel((0, 0))))
 with (home / "calls.jsonl").open("a") as log:
-    log.write(json.dumps({"args": args, "prompt": prompt}) + "\\n")
+    log.write(json.dumps({"args": args, "prompt": prompt, "reference_pixels": reference_pixels}) + "\\n")
 out = Path(args[args.index("--output-last-message") + 1])
 images = [args[i + 1] for i, a in enumerate(args) if a == "--image"]
 result = {"image_path": "", "description": "e2e fake codex makes only enhancements", "references": []}
@@ -68,6 +73,16 @@ if prompt.startswith("Create ONE finished standalone raster image"):
     path = home / "generated_images" / (uuid.uuid4().hex + ".png")
     picture.save(path)
     result.update(image_path=str(path), description="e2e: a generated placeholder poster")
+elif images and prompt.startswith("Edit the FIRST attached image"):
+    from PIL import ImageDraw
+    with Image.open(images[0]) as source:
+        picture = source.convert("RGBA")
+    color = (0, 0, 255, 255) if picture.getpixel((0, 0)) == (0, 255, 0, 255) else (0, 255, 0, 255)
+    ImageDraw.Draw(picture).rectangle((0, 0, 99, 99), fill=color)
+    (home / "generated_images").mkdir(exist_ok=True)
+    path = home / "generated_images" / (uuid.uuid4().hex + ".png")
+    picture.save(path)
+    result.update(image_path=str(path), description="e2e: edited the supplied picture")
 elif images and prompt.startswith("Restore and enhance"):
     with Image.open(images[0]) as source:
         picture = source.convert("RGB")
@@ -99,6 +114,8 @@ def user_text(body):
 def phase(body):
     tools = [t.get("name") for t in body.get("tools") or []]
     system = system_text(body)
+    if system.startswith("Decide whether the current request asks to edit a supplied image"):
+        return "image_intent"
     if "web_search" in tools:
         return "research"
     if "capability router" in system.lower():
@@ -129,6 +146,10 @@ class Brain:
             stop = "tool_use" if calls else stop
         elif kind == "router":
             text = json.dumps(self.route(body))
+        elif kind == "image_intent":
+            # Scripted test decisions, not production routing rules.
+            request = json.loads(user_text(body))["request"].casefold()
+            text = json.dumps({'action':'keep_format' if request.startswith(('объясни','почему','explain','why')) else 'edit_image'})
         elif kind == "visual_plan":
             text = json.dumps({"topic": "supplied image", "visual_strategy": "walk through the supplied image",
                                "presentation": "image_walkthrough", "search_queries": [], "image_prompt": "", "research_query": ""})
@@ -264,6 +285,7 @@ class World:
         self.hermetic, self.brain, self.lock = hermetic, Brain(), threading.Lock()
         self.discord, self.model_calls, self.jev_calls, self.dms, self.next_id = [], [], [], [], 990000000000100000
         self.files, self.tts_calls, self.media_dir = {}, [], Path(tempfile.mkdtemp(prefix="e2e-media-"))
+        self.reply_messages = {}
         world = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -445,7 +467,12 @@ class FakeUser:
 class FakeChannel:
     id = CHANNEL_ID
 
+    def __init__(self, world):
+        self.world = world
+
     async def fetch_message(self, message_id):
+        if str(message_id) in self.world.reply_messages:
+            return self.world.reply_messages[str(message_id)]
         raise LookupError("the self-test channel has no earlier messages")
 
 
@@ -462,7 +489,7 @@ class FakeMessage:
 
     def __init__(self, world, text, attachments=()):
         self.world, self.id = world, int(world.new_id())
-        self.content, self.channel = f"<@{BOT_ID}> {text}", FakeChannel()
+        self.content, self.channel = f"<@{BOT_ID}> {text}", FakeChannel(world)
         self.author = FakeUser(USER_ID, "e2e-selftest", bot=False)
         self.created_at = datetime.now(timezone.utc)
         self.attachments = [FakeAttachment(world, path) for path in attachments]
@@ -564,6 +591,11 @@ def run_scenario(bot, world, scenario):
     started = len(world.discord), len(world.model_calls), len(world.jev_calls)
     ok_before = tool_ok_calls(scenario["tool"]) if scenario.get("tool") else 0
     message = FakeMessage(world, scenario["request"], scenario.get("attach") or ())
+    if scenario.get('reply_to'):
+        import discord
+        target = scenario['reply_to']
+        world.reply_messages[str(target.id)] = target
+        message.reference = discord.MessageReference(message_id=target.id,channel_id=CHANNEL_ID)
     clock = time.monotonic()
     asyncio.run(bot.on_message(message))
     # Wait for the job the handler submitted (text and video workers are single-threaded executors).
@@ -606,7 +638,8 @@ def run_scenario(bot, world, scenario):
             calls_log = Path(os.environ.get("CODEX_HOME") or "/nonexistent") / "calls.jsonl"
             if world.hermetic and calls_log.exists():
                 last = json.loads(calls_log.read_text().splitlines()[-1])
-                check("the image worker ran in generation mode", last["prompt"].startswith("Create ONE finished standalone"), last["prompt"][:80])
+                expected = 'Edit the FIRST attached image' if scenario.get('edit') else 'Create ONE finished standalone'
+                check("the image worker used the requested image operation", last["prompt"].startswith(expected), last["prompt"][:80])
             if uploads:
                 from PIL import Image
                 with Image.open(uploads[-1]["media_path"]) as produced:
@@ -766,6 +799,51 @@ def learning_loop(bot, world, capture):
     return {"checks": checks}
 
 
+def image_followup_loop(bot,world,capture,root):
+    """An implicit edit of a legacy image, then an edit of that edited result."""
+    import interactions as I
+    import router
+    from PIL import Image
+    print('\n━━━━ image follow-ups: edit the exact previous output')
+    checks=[]
+    def check(name,ok,detail=''):
+        checks.append((name,bool(ok),detail))
+        print(('   ✓ ' if ok else '   ✗ ')+name+((': '+str(detail)) if not ok else ''))
+    def target(result):
+        reply=FakeMessage(world,'AI-изображение',[result['media']['path']])
+        reply.id=int(result['status']['message_id'])
+        reply.author=FakeUser(BOT_ID,'BigBro',True)
+        return reply
+    previous=root
+    saved=I.state().get_explanation(str(CHANNEL_ID),str(root['status']['message_id']))
+    check('the generated answer saved its own pixels',saved and saved['source'].get('answer_image') and saved['source'].get('images'))
+    # Reproduce an image produced before pixel memory was introduced.
+    saved['source'].update(images=[],native_images=[],image_meta=[],answer_image=False)
+    I.state().put_explanation(str(CHANNEL_ID),str(root['status']['message_id']),saved)
+    for index,request in enumerate(('теперь сделай так чтобы он сидел на туристическом стуле и кушал бешбармак',
+                                    'теперь поменяй цвет стула на красный')):
+        before_tts=len(world.tts_calls)
+        scenario={'request':request,'expect':'generated','reply_to':target(previous),'edit':True}
+        scenario['_after_decision']=max([d['id'] for d in router.backlog().recent(1)] or [0])
+        mark=len(capture.records)
+        result=run_scenario(bot,world,scenario)
+        show(result,capture.records[mark:])
+        checks.extend(result['checks'])
+        check('image edit does not synthesize narration',len(world.tts_calls)==before_tts)
+        check('image edit never enters video planning/review',not any(c['phase'] in ('visual_plan','image_plan','image_review') for c in result['model_calls']))
+        log=Path(os.environ['CODEX_HOME'])/'calls.jsonl'
+        call=json.loads(log.read_text().splitlines()[-1])
+        refs=[call['args'][n+1] for n,arg in enumerate(call['args']) if arg=='--image']
+        check('the edit supplied exactly one image reference',len(refs)==1)
+        if refs:
+            with Image.open(previous['media']['path']) as expected:
+                check('the source is the exact replied-to output',call['reference_pixels'][0]==list(expected.convert('RGBA').getpixel((0,0))))
+        memory=I.state().get_explanation(str(CHANNEL_ID),str(result['status']['message_id']))
+        check('edited output is retained for the next edit',memory and memory['source'].get('answer_image') and memory['source'].get('images'))
+        previous=result
+    return {'checks':checks}
+
+
 def tool_probe():
     import tool_registry
     import tool_runtime
@@ -872,6 +950,11 @@ def main(argv=None):
         show(result, capture.records[mark:])
         ok = ok and all(passed for _, passed, _ in result["checks"])
     if not args.live and not args.requests:
+        generated=next((r for r in results if r.get('scenario',{}).get('expect')=='generated' and r.get('media')),None)
+        if generated and codex_home is not None:
+            loop=image_followup_loop(bot,world,capture,generated)
+            results.append(loop)
+            ok=ok and all(passed for _,passed,_ in loop['checks'])
         loop = learning_loop(bot, world, capture)
         results.append(loop)
         ok = ok and all(passed for _, passed, _ in loop["checks"])

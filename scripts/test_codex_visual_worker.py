@@ -9,6 +9,31 @@ import codex_visual_worker as worker
 
 
 class WorkerTests(unittest.TestCase):
+    def test_image_edit_needs_actual_source_and_preserves_its_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            work=Path(directory)
+            request={'mode':'image','prompt':'Let him sit in a camping chair','options':{'edit':True},'references':[]}
+            (work/'request.json').write_text(json.dumps(request))
+            with patch.object(worker.subprocess,'Popen') as run:
+                with self.assertRaisesRegex(ValueError,'needs a source image'):worker.run_job(work)
+                run.assert_not_called()
+            (work/'reference.png').write_bytes(b'actual reference would be supplied here')
+            request['references']=['reference.png']
+            (work/'request.json').write_text(json.dumps(request))
+            seen={}
+            def fake_popen(args,**kwargs):
+                seen['args']=args
+                class Proc:
+                    pid,returncode=0,0
+                    def communicate(self,task,timeout):
+                        seen['task']=task
+                        (work/'result.json').write_text('{"image_path":"","description":"","references":[]}')
+                return Proc()
+            with patch.object(worker.subprocess,'Popen',side_effect=fake_popen):worker.run_job(work)
+        self.assertTrue(seen['task'].startswith('Edit the FIRST attached image'))
+        self.assertIn('Preserve the same character identity',seen['task'])
+        self.assertEqual(seen['args'].count('--image'),1)
+
     def test_invalid_image_mode_is_rejected_before_running_codex(self):
         with tempfile.TemporaryDirectory() as directory,patch.object(worker.subprocess,'Popen') as run:
             work=Path(directory);(work/'request.json').write_text(json.dumps({'prompt':'cat','mode':'execute-shell'}))

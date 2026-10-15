@@ -136,6 +136,14 @@ def run_job(work):
               "Return the actual absolute saved image path and a short description in the required JSON. If generation fails or "
               "the request cannot be fulfilled, return an empty image_path and a concise reason instead of fabricating an image.\n\n"
               +json.dumps({"visual_brief":prompt,"source_context":str(request.get("source_context") or "")[:16000]},ensure_ascii=False))
+        if (request.get('options') or {}).get('edit'):
+            if not references:
+                raise ValueError('image editing needs a source image')
+            task=('Edit the FIRST attached image with the built-in image generation tool, using its actual pixels as '
+                  'the edit reference. Preserve the same character identity, appearance and existing details except where '
+                  'the CURRENT request changes them. Apply the requested pose, objects, scene and style changes. '
+                  'Other attachments are secondary references. Preserve existing transparency unless asked to change it. '
+                  'Return one edited image, not a video, collage or a new character inferred only from a description.\n\n'+task)
     timeout = max(30, min(360, int(os.environ.get("CODEX_IMAGE_TIMEOUT" if mode in ("image", "enhance") else "CODEX_VISUAL_TIMEOUT")
                                             or (360 if mode in ("image", "enhance") else 210))))
     with (work / "events.jsonl").open("w") as out, (work / "stderr.log").open("w") as err:

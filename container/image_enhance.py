@@ -107,7 +107,7 @@ def run(job, images, workdir):
     P.discord_file(job, out, "enhanced." + ("png" if kind == "image/png" else "jpg"), kind, content)
     try:  # a follow-up ("а теперь раскрась") can refer to this answer
         import followups
-        followups.record_image(job, f"Generatively enhanced version of the supplied photo ({width}x{height})")
+        followups.record_image(job, f"Generatively enhanced version of the supplied photo ({width}x{height})",out.read_bytes())
         followups.remember(job)
     except Exception as exc:
         log.warning("could not save image memory: %s", type(exc).__name__)

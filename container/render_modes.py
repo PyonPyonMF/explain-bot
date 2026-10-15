@@ -67,7 +67,7 @@ def research_requested(text):
     return False
 
 
-def response_format(text):
+def explicit_response_format(text):
     """Read explicit format instructions in the caller's words, not in quoted posts or code."""
     task = text_task(text)
     if task in ("transcript", "summary"):
@@ -111,4 +111,8 @@ def response_format(text):
                              r"(?:\s+[\w-]+(?:ым|им))?\s*$", prefix):
                     continue
             requests.append((position, mode))
-    return max(requests)[1] if requests else "video"
+    return max(requests)[1] if requests else None
+
+
+def response_format(text):
+    return explicit_response_format(text) or "video"

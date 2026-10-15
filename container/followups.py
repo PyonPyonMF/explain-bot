@@ -1,5 +1,6 @@
 """Bounded, channel-scoped memory for video follow-ups. Never persist Discord/API credentials."""
 import base64
+import io
 import json
 import re
 
@@ -30,8 +31,34 @@ def record_text(job, answer):
                                  "text": answer[:26_000 if job.get("text_task") == "research" else 16_000]}
 
 
-def record_image(job, description):
+def record_image(job, description, pixels=None):
     job["image_answer_record"]={"format":"image","title":"AI-изображение","description":str(description)[:1000]}
+    if pixels:
+        job['image_answer_pixels']=pixels
+
+
+def _answer_image_source(source, pixels, description):
+    """Keep bounded pixels of the delivered answer, rather than its original reference image."""
+    from PIL import Image
+    with Image.open(io.BytesIO(pixels)) as image:
+        image.load()
+        alpha=image.mode in ('RGBA','LA') or 'transparency' in image.info
+        image=image.convert('RGBA' if alpha else 'RGB')
+        image.thumbnail((1568,1568),Image.Resampling.LANCZOS)
+        while True:
+            out=io.BytesIO()
+            image.save(out,'PNG' if alpha else 'JPEG',**({'optimize':True} if alpha else {'quality':85}))
+            encoded=base64.b64encode(out.getvalue()).decode()
+            if len(encoded)<=MAX_IMAGE_CHARS:
+                break
+            if max(image.size)<=1:
+                raise ValueError('image memory budget')
+            image.thumbnail((max(1,int(image.width*.75)),max(1,int(image.height*.75))),Image.Resampling.LANCZOS)
+    native=base64.b64encode(pixels).decode() if len(pixels)*4/3<=MAX_NATIVE_CHARS else None
+    return {**source,'images':[{'type':'image','source':{'type':'base64','media_type':'image/png' if alpha else 'image/jpeg','data':encoded}}],
+            'image_meta':[{'caption':str(description)[:1000]}],'native_images':[native],'answer_image':True,
+            'primary_document':False,'primary_x':False,'primary_youtube':False,'primary_x_video':False,
+            'youtube_sources':[],'x_video_sources':[],'source_warnings':[]}
 
 
 def _without_image_listing(texts):
@@ -100,6 +127,8 @@ def remember(job):
     record = {"root_id": previous.get("root_id") or str(job["response_message_id"]),
               "parent_id": job.get("followup_message_id"), "history": history, "history_truncated": shortened,
               "source": _source(job, job.get("prepared_inputs") or ([], [], []))}
+    if answer.get('format')=='image' and job.get('image_answer_pixels'):
+        record['source']=_answer_image_source(record['source'],job['image_answer_pixels'],answer.get('description',''))
     # Unicode-heavy sources must also obey the byte budget, not just the character budget.
     while len(json.dumps(record, ensure_ascii=False).encode()) > 2_000_000 and any(record['source']['native_images']):
         biggest = max(range(len(record['source']['native_images'])), key=lambda i:len(record['source']['native_images'][i] or ''))
@@ -129,6 +158,17 @@ def prepare(job, collect):
     from inputs import URL_RE
     from speech import read_transcripts
     source = dict(source)
+    latest=(context.get('history') or [{}])[-1]
+    image_followup=job.get('response_format')=='image' and latest.get('format')=='image'
+    if image_followup and job.get('reply_image') and not (source.get('answer_image') and source.get('images')):
+        # Older versions saved only a generated image's description. Recover its
+        # actual attachment, without following its reply back to the original input.
+        reply=dict(job['reply_image'])
+        reply.update(content='',message_reference=None,referenced_message=None)
+        fresh.update(kind='message',message=reply,question=job.get('text') or '',request_message=job.get('message') or {})
+        source.update(images=[],image_meta=[],native_images=[])
+    if image_followup:
+        source.update(primary_youtube=False,primary_x_video=False,youtube_sources=[],x_video_sources=[])
     youtube_urls = source.get("youtube_sources") or list(dict.fromkeys(u for t in source.get("texts", [])
                      if t.startswith("<linked_page") for u in URL_RE.findall(t) if youtube.video_id(u)))
     x_urls = source.get("x_video_sources") or []
@@ -149,8 +189,10 @@ def prepare(job, collect):
         if key in job:
             fresh[key] = job[key]  # Progress only; these credentials are never included in saved source snapshots.
     new_images, new_texts, new_notes = collect(fresh)
-    all_images = new_images + list(source.get("images") or [])
-    all_meta = (fresh.get("image_meta") or []) + list(source.get("image_meta") or [])
+    old_images=list(source.get('images') or [])
+    old_first=image_followup and source.get('answer_image')
+    all_images = old_images+new_images if old_first else new_images+old_images
+    all_meta = list(source.get('image_meta') or [])+(fresh.get('image_meta') or []) if old_first else (fresh.get("image_meta") or []) + list(source.get("image_meta") or [])
     image_limit = youtube.MAX_FRAMES if fresh.get("youtube_frame_analysis") else 12
     images, meta = all_images[:image_limit], all_meta[:image_limit]
     source_native = source.get('native_images') or []
@@ -160,7 +202,8 @@ def prepare(job, collect):
             restored_native.append(base64.b64decode(source_native[i],validate=True) if i < len(source_native) and source_native[i] else None)
         except (ValueError,TypeError):
             restored_native.append(None)
-    job["image_originals"] = ((fresh.get("image_originals") or [None] * len(new_images)) + restored_native)[:image_limit]
+    fresh_native=fresh.get('image_originals') or [None]*len(new_images)
+    job["image_originals"] = (restored_native+fresh_native if old_first else fresh_native+restored_native)[:image_limit]
     old_texts = _without_image_listing(source.get("texts") or [])
     # A successful reread replaces an older partial transcript of the same source URL.
     def transcript_url(record):

@@ -650,6 +650,9 @@ def handle_job(job):
         log.exception("capability router unavailable")
     workdir = tempfile.mkdtemp(prefix="job-")
     try:
+        from image_answers import resolve_request
+        if job.get('followup'):
+            resolve_request(job)
         if job.get("response_format") == "image" and job.get("text_task") == "enhance":
             import image_enhance
             from followups import prepare

@@ -37,6 +37,24 @@ def message(content="<@999> explain this", mid=300, reference=None):
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_implicit_image_edit_reply_acknowledges_an_image(self):
+        import image_answers
+        self.image_intent.stop()
+        saved={'source':{'images':[],'texts':[]},'history':[{'format':'image','description':'A cat in Kazakh clothing'}]}
+        I.state().put_explanation('789','200',saved)
+        target=message('AI-изображение',mid=200)
+        target.author=SimpleNamespace(id=999,name='Bot',global_name=None,bot=True)
+        target.attachments=[SimpleNamespace(to_dict=lambda:{'filename':'image.png','content_type':'image/png','url':'https://cdn.example/image.png'})]
+        ref=discord.MessageReference(message_id=200,channel_id=789); ref.resolved=target
+        msg=message('<@999> теперь сделай так чтобы он сидел на туристическом стуле и кушал бешбармак',reference=ref)
+        response=json.dumps({'content':[{'type':'text','text':'{"action":"edit_image"}'}],'stop_reason':'end_turn'}).encode()
+        with patch.dict(os.environ,{'ANTHROPIC_API_KEY':'test-only'}),patch('pipeline._http',return_value=(200,response)):
+            await self.bot.on_message(msg)
+        job=self.submit.call_args.args[1]
+        self.assertEqual((job['response_format'],job['image_edit']),('image',True))
+        self.assertEqual(job['reply_image']['attachments'][0]['filename'],'image.png')
+        self.assertEqual(msg.reply.call_args.args[0],gateway.mention_strings()['image'])
+
     async def test_text_format_after_video_question_uses_text_worker(self):
         target = message("Video", mid=100)
         target.attachments = [SimpleNamespace(to_dict=lambda: {"id": "1", "filename": "clip.mp4",
@@ -53,6 +71,8 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(msg.reply.call_args.args[0], gateway.mention_strings()["text"])
 
     async def asyncSetUp(self):
+        self.image_intent=patch('image_answers.resolve_request',side_effect=lambda job:job.update(image_intent_checked=True))
+        self.image_intent.start()
         self.env = patch.dict(os.environ, {"DAILY_LIMIT": "5", "BOT_LANG": "ru", "MAX_QUEUED_JOBS": "1"})
         self.env.start()
         self.tmp = tempfile.TemporaryDirectory()
@@ -67,6 +87,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.bot.text_responder.submit = self.text_submit
 
     async def asyncTearDown(self):
+        self.image_intent.stop()
         await self.bot.close()
         I._state.db.close()
         I._state = self.old_state

@@ -10,7 +10,11 @@ A Discord bot that makes short narrated explainer videos in a 3Blue1Brown-like s
   Only explicitly supplied/replied-to material supplies the subject. With no subject, the bot asks for it.
   Generated output is identified as AI imagery, validated before upload and delivered within `MAX_UPLOAD_MB`;
   PNG alpha is preserved. Errors do not silently turn the request into a video or a web-image substitute.
-  Image descriptions and original source context are retained for follow-ups. `CODEX_IMAGES=0` disables it.
+  Delivered image pixels and original source context are retained for follow-ups. A reply such as "теперь пусть
+  он сидит на стуле" is classified in context and edits the same image through ImageGen; it does not require
+  repeating the word "картинка". Questions remain explanations, and explicit text/video instructions take priority.
+  Edits use the last replied-to output as their primary reference, including after a restart; older answers that
+  retained only descriptions recover their actual Discord attachment. `CODEX_IMAGES=0` disables image generation.
   `CODEX_IMAGE_TIMEOUT` caps standalone worker inference at 30–360 seconds (default 360); the bot allows queue
   wait plus execution up to 750 seconds. Codex authentication stays on the host, outside the bot container.
 
