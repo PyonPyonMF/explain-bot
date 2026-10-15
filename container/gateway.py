@@ -111,6 +111,12 @@ async def _referenced(message):
         raise QuotedMessageUnavailable() from exc
 
 
+async def image_request(job):
+    from image_answers import resolve_request
+    await asyncio.to_thread(resolve_request,job)
+    return job
+
+
 async def mention_job(message, bot_id, depth=0):
     text = re.sub(rf"<@!?{bot_id}>", "", message.content).strip()[:I.MAX_TEXT]
     text, mode = mention_mode(text)
@@ -133,6 +139,7 @@ async def mention_job(message, bot_id, depth=0):
         target = message
 
     if target is not None and str(getattr(target.author, "id", "")) == str(bot_id):
+        from image_answers import has_image
         memory = await asyncio.to_thread(I.state().get_explanation, str(message.channel.id), str(target.id))
         if memory is None:
             if depth >= 3:
@@ -147,13 +154,16 @@ async def mention_job(message, bot_id, depth=0):
             prior = source_job.get("followup") or {}
             history = list(prior.get("history") or []) + [{"question": source_job.get("question") or source_job.get("text") or "",
                 "title": target.content.splitlines()[0][:300] if target.content else "Earlier video",
-                "narration": "", "script_available": False}]
+                "narration": "", "script_available": False,
+                "format":"image" if has_image(message_payload(target)) else source_job.get('response_format','video')}]
             memory = {"root_id": prior.get("root_id") or str(target.id), "source_job": source_job, "history": history[-8:]}
-        return {**job, "kind": "query", "text": text or mention_strings()["followup_question"], "message": own,
-                "context_messages": 0, "followup": memory, "followup_message_id": str(target.id)}
+        reply_image=message_payload(target)
+        return await image_request({**job, "kind": "query", "text": text or mention_strings()["followup_question"], "message": own,
+                "context_messages": 0, "followup": memory, "followup_message_id": str(target.id),
+                **({'reply_image':reply_image} if has_image(reply_image) else {})})
 
     if own.get("attachments"):
-        return {**job, "kind": "query", "text": text or mention_strings()["attachment"], "message": own}
+        return await image_request({**job, "kind": "query", "text": text or mention_strings()["attachment"], "message": own})
 
     if target is not None:
         if target.message_snapshots:
@@ -163,7 +173,7 @@ async def mention_job(message, bot_id, depth=0):
             post = message_payload(target)
         if not I._has_content(post):
             raise QuotedMessageUnavailable()
-        return {**job, "kind": "message", "text": "", "message": post, "question": text, "request_message": own}
+        return await image_request({**job, "kind": "message", "text": "", "message": post, "question": text, "request_message": own})
     return {**job, "kind": "query", "text": text or mention_strings()["context"], "message": own}
 
 
