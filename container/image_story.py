@@ -4,6 +4,7 @@ import concurrent.futures as cf
 from functools import lru_cache
 import io
 import json
+import logging
 import math
 import multiprocessing as mp
 import os
@@ -17,11 +18,19 @@ WIDTH, HEIGHT, FPS = 720, 1280, 24
 STAGE = (0, 90, WIDTH, HEIGHT - 160)
 BG = (13, 18, 27)
 COLORS = [(100, 227, 238), (255, 219, 116)]
+log = logging.getLogger('image-story')
+_PLAN_ERROR_CODES = {
+    'focus is too wide for a phone: choose a specific region; the overview is automatic':'focus_too_wide',
+    'callout text cannot fit at a readable font size':'unreadable_label',
+}
 
 PLAN_PROMPT = """Plan a short narrated portrait video that explains the supplied image(s).
 Use this format when the user's question is about what a screenshot, diagram, chart, photo, meme or interface
 shows. If the current request instead needs a NEW diagram, simulation or implementation example and looking
 at the original picture would not answer it, return {"use_image_story":false}.
+Also return {"use_image_story":false} when the question checks whether a caption or external claim is true
+and image regions cannot establish that truth. Seeing a meme can explain the joke but cannot prove its premise.
+Answering with evidence or reasoning matters more than having an attached picture to zoom into.
 
 Otherwise return ONE JSON object, no code:
 {"use_image_story":true,"title":"...","language":"ru","scenes":[
@@ -153,8 +162,16 @@ def make_plan(job, assets, images, texts):
             raw = A._ask_claude(PLAN_PROMPT, content, "image walkthrough plan", max_tokens=6000)
             return validate_plan(raw, assets)
         except (ValueError, P.PlanError) as exc:
+            # Parser errors may contain model/source text; logs keep only known
+            # validation codes or the exception type, never that source content.
+            log.warning('image walkthrough plan rejected: attempt=%d reason=%s',attempt+1,
+                        _PLAN_ERROR_CODES.get(str(exc),type(exc).__name__))
             if attempt:
-                raise P.UserError("Не удалось подготовить читаемый разбор изображения. Попробуй уточнить, какой участок объяснить.") from exc
+                # No narration or frames have been produced yet. Keep the source
+                # and answer, and let the normal video pipeline handle it instead
+                # of presenting a renderer constraint as a missing user question.
+                job['image_walkthrough']=False
+                return None
             content.append({"type": "text", "text": "Fix the plan validation error: " + str(exc)})
 
 

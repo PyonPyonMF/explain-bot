@@ -33,6 +33,9 @@ Choose image_walkthrough when the existing screenshot, diagram, chart, photo, me
 the subject to explain. That mode uses a portrait full-frame image with zooms, highlights and short callouts;
 it needs no decorative generated image or web-image search. Choose animation when the current question
 requires a new simulation, conceptual diagram or worked implementation example instead of reading the source image.
+Use animation for checking whether a caption or an external claim is true when the answer needs reasoning or
+evidence beyond the pixels. An attached meme does not by itself make a fact-check a tour of image regions.
+For such answers the supplied image can remain a source reference; do not invent decorative illustrations.
 When the user shared a link, the subject is the content behind it (<linked_page>: the post, article or video),
 never the URL, the website, its logo or link-mirror services such as fixvx, fxtwitter or vxtwitter. Do not
 search for logos or app icons unless the explanation is about that brand itself. Images already attached from

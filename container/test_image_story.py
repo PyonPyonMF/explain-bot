@@ -32,6 +32,35 @@ def scene(**extra):
 
 
 class PortraitTests(unittest.TestCase):
+    def test_invalid_plans_exhaust_repairs_and_allow_normal_video(self):
+        job={'kind':'query','text':'Is the caption true?','image_walkthrough':True}
+        bad={'scenes':[scene(focus=[0,0,1,1],callouts=[{'box':[0,.1,1,.9],'label':'Claim'}])]*2}
+        with patch.object(A,'_ask_claude',return_value=bad) as ask,self.assertLogs('image-story',level='WARNING') as logs:
+            plan=V.make_plan(job,[self.asset],[],['A claim in the supplied post'])
+        self.assertIsNone(plan)
+        self.assertFalse(job['image_walkthrough'])
+        self.assertEqual(ask.call_count,2)
+        self.assertTrue(any('focus_too_wide' in line for line in logs.output))
+
+    def test_parser_errors_do_not_log_model_or_source_text(self):
+        with patch.object(A,'_ask_claude',side_effect=P.PlanError('private-source-text')), \
+             self.assertLogs('image-story',level='WARNING') as logs:
+            self.assertIsNone(V.make_plan({'kind':'query','text':'Explain'},[self.asset],[],[]))
+        self.assertNotIn('private-source-text',' '.join(logs.output))
+
+    def test_a_valid_repaired_plan_still_uses_the_portrait_renderer(self):
+        job={'kind':'query','text':'Explain the diagram'}
+        with patch.object(A,'_ask_claude',side_effect=[{'scenes':[]},{'scenes':[scene(),scene()]}]), \
+             self.assertLogs('image-story',level='WARNING'):
+            plan=V.make_plan(job,[self.asset],[],[])
+        self.assertEqual(len(plan['scenes']),2)
+        self.assertIsNot(job.get('image_walkthrough'),False)
+
+    def test_genuine_cannot_explain_reason_is_not_hidden_by_fallback(self):
+        with patch.object(A,'_ask_claude',return_value={'cannot_explain_reason':'The source text is illegible'}):
+            with self.assertRaises(P.UserError):
+                V.make_plan({'kind':'query','text':'Read the tiny text'},[self.asset],[],[])
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
         self.path=Path(self.tmp.name)/'source.png'; self.path.write_bytes(image_bytes())
