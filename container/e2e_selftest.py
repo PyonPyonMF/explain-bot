@@ -128,6 +128,8 @@ def phase(body):
         return "visual_plan"
     if system.startswith("Plan a short narrated portrait video"):
         return "image_plan"
+    if system.startswith('You plan short narrated explainer videos'):
+        return 'scene_plan'
     if system.startswith("Review a portrait image walkthrough"):
         return "image_review"
     return "other"
@@ -154,7 +156,12 @@ class Brain:
             text = json.dumps({"topic": "supplied image", "visual_strategy": "walk through the supplied image",
                                "presentation": "image_walkthrough", "search_queries": [], "image_prompt": "", "research_query": ""})
         elif kind == "image_plan":
-            text = json.dumps(self.image_plan(body), ensure_ascii=False)
+            text = json.dumps({'scenes':[]} if getattr(self,'bad_image_plan',False) else self.image_plan(body), ensure_ascii=False)
+        elif kind == 'scene_plan':
+            text=json.dumps({'title':'e2e: прямой ответ','language':'ru','scenes':[
+                {'type':'title','title':'Проверка утверждения','narration':'Отвечаем на вопрос о достоверности утверждения.'},
+                {'type':'statement','text':'Картинка сама по себе не доказывает утверждение',
+                 'narration':'Это проверка обычного видеопути. Ошибка оформления картинки не должна мешать ответу на вопрос.'}]},ensure_ascii=False)
         elif kind == "image_review":
             text = json.dumps({"ok": True})
         elif kind == "text_answer":
@@ -844,6 +851,31 @@ def image_followup_loop(bot,world,capture,root):
     return {'checks':checks}
 
 
+def walkthrough_fallback_loop(bot,world,capture):
+    """Invalid portrait plans must still deliver an answer through the normal renderer."""
+    from unittest.mock import patch
+    import router
+    scenario={'request':'объясни, правда ли утверждение на картинке','expect':'video',
+              'attach':[sample_picture(world.media_dir)],
+              '_after_decision':max([d['id'] for d in router.backlog().recent(1)] or [0])}
+    mark=len(capture.records)
+    world.brain.bad_image_plan=True
+    try:
+        with patch.dict(os.environ,{'FULL_GEN':'0','ALLOW_PRIVATE_FETCH':'1'}):
+            result=run_scenario(bot,world,scenario)
+    finally:
+        world.brain.bad_image_plan=False
+    show(result,capture.records[mark:])
+    phases=[call['phase'] for call in result['model_calls']]
+    extra=[('invalid image plans were retried twice',phases.count('image_plan')==2,str(phases)),
+           ('the normal scene planner answered after portrait failure','scene_plan' in phases,str(phases)),
+           ('an internal layout problem did not ask the user for another region',
+            'уточнить, какой участок' not in (result.get('final') or {}).get('content',''),'')]
+    for name,ok,detail in extra:
+        print(('   ✓ ' if ok else '   ✗ ')+name)
+    return {'checks':result['checks']+extra}
+
+
 def tool_probe():
     import tool_registry
     import tool_runtime
@@ -950,6 +982,9 @@ def main(argv=None):
         show(result, capture.records[mark:])
         ok = ok and all(passed for _, passed, _ in result["checks"])
     if not args.live and not args.requests:
+        loop=walkthrough_fallback_loop(bot,world,capture)
+        results.append(loop)
+        ok=ok and all(passed for _,passed,_ in loop['checks'])
         generated=next((r for r in results if r.get('scenario',{}).get('expect')=='generated' and r.get('media')),None)
         if generated and codex_home is not None:
             loop=image_followup_loop(bot,world,capture,generated)

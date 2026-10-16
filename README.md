@@ -87,6 +87,9 @@ Videos can use actual image references instead of drawing every object with geom
   New simulations/diagrams can still use the animation renderer; explicit 3D and text requests keep their own
   modes. `IMAGE_WALKTHROUGH=0` disables
   the automatic image-walkthrough route.
+  Fact-checking a caption can use the normal video path when zooming into the image cannot establish its truth.
+  If portrait planning still produces invalid geometry or unreadable labels after repair, the normal renderer
+  answers from the same source; an internal layout failure does not ask the user to choose another region.
 - An explicitly attached PDF is the primary subject: the bot reads its text and up to four labeled page previews.
   Limits are 10 MiB, 60 pages and 120,000 extracted characters. Unrelated chat text and images are excluded for
   document requests. A bare mention with an attachment explains the attachment. If the file cannot be read
