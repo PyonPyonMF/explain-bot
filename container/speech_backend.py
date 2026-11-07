@@ -88,10 +88,18 @@ def block():
             pass
 
 
-def run(kind, remote, local):
-    mode = os.environ.get(kind.upper()+"_PROVIDER","auto").lower()
+def provider(kind):
+    """Narration is always ElevenLabs unless TTS_PROVIDER=local is chosen explicitly: a different (Piper) voice in
+    the middle of a video, or a failure because the home computer is off, is worse than a clear provider error.
+    For TTS, `auto` therefore means ElevenLabs; recognition keeps the automatic local fallback."""
+    mode = (os.environ.get(kind.upper()+"_PROVIDER") or "").strip().lower() or ("elevenlabs" if kind=="tts" else "auto")
     if mode not in ("auto","local","elevenlabs"):
         raise LocalSpeechError("invalid_speech_provider")
+    return "elevenlabs" if kind=="tts" and mode=="auto" else mode
+
+
+def run(kind, remote, local):
+    mode = provider(kind)
     if mode=="local" or (mode=="auto" and configured() and blocked()):
         return local()
     try:

@@ -75,7 +75,7 @@ def help_text(section="overview", locale="ru", bot_id=None):
 
 Вложения Discord и прямые медиафайлы: до {size} МиБ; видео смотрю по 6 кадрам, речь распознаю частями. Лимит речи — {seconds//60} минут на запись, до {clips} записей за запрос. Неполную обработку отмечаю.
 **YouTube и видео X:** `разбери`, `summarize` или `сделай транскрипцию` со ссылкой. По умолчанию анализирую речь; кадры — по просьбе. До 120 минут на ролик, части по 5 минут; готовую речь использую повторно.
-При недоступности ElevenLabs помогает локальная речь на домашнем компьютере: нужен включённый компьютер. Локальное распознавание не разделяет собеседников; голос озвучки отличается.
+Озвучка видео — всегда ElevenLabs. При недоступности ElevenLabs распознавание может перейти на домашний компьютер (нужен включённый компьютер); локальное распознавание не разделяет собеседников.
 `разбери покадрово 00:10–00:20` дополнительно включает кадры — до 24 снимков из выбранного интервала. Без интервала беру выборку по всему ролику; события между снимками могу пропустить.
 Распознавание может ошибаться; метки говорящих не устанавливают их личности.""",
             "sources": f"""**Картинки, документы и ссылки**
@@ -184,7 +184,7 @@ Reply to the recording and mention me {mention}:
 
 Discord attachments and direct media links: {size} MiB per file, up to {seconds//60} minutes of speech and {clips} recordings per request. Attached video gets six sampled frames. Partial transcription is disclosed.
 **YouTube and X video:** send a link with an explanation, summary or transcription request. Speech only by default, in five-minute parts for recordings up to 120 minutes. Transcripts are reused.
-When ElevenLabs is unavailable, local speech needs the home computer online. Local recognition does not distinguish speakers; the narration voice differs.
+Video narration always uses ElevenLabs. When ElevenLabs is unavailable, recognition can fall back to the home computer (it must be online); local recognition does not distinguish speakers.
 `analyze frame-by-frame 00:10–00:20` additionally samples up to 24 frames. Without a range, samples span the video; intervening events may be missed. Speaker labels are local to each audio part and do not identify people.""",
             "sources": f"""**Images, files and links**
 Attach a source and mention me {mention}, or reply to its message.

@@ -175,13 +175,18 @@ within a request is transcribed once. Missing audio, failures and truncated spee
 model input; failures and limits are also disclosed to the user. Speech recognition is separately billed by ElevenLabs. `SPEECH_RECOGNITION=0` disables it,
 `SPEECH_MAX_SECONDS` changes the per-clip cap (up to 7200), and `ELEVENLABS_STT_MODEL` selects the Scribe model.
 
-`STT_PROVIDER` and `TTS_PROVIDER` accept `auto` (default), `elevenlabs`, or `local`. With a configured private
-speech worker, `auto` falls back to local Whisper/Piper on provider quota/authentication/network failure.
-Quota/authentication failures open a shared 24-hour circuit for both services, persisted across bot restarts;
-delete `/data/speech-provider.json` and restart the bot after restoring the provider quota to retry immediately.
-`local` always skips ElevenLabs. A successful fallback continues the original job and caches completed speech
-parts. Local Whisper provides timestamps but does **not** diarize speakers. Piper uses separate Russian and
-English voices (selected by Cyrillic text), and sounds different from the configured ElevenLabs voice.
+Video narration always uses ElevenLabs (`ELEVENLABS_VOICE_ID`). `TTS_PROVIDER` accepts `elevenlabs` (default) or
+`local`; `auto` is treated as `elevenlabs`, so neither an open circuit nor a switched-off home computer changes the
+voice. A failed narration reports the ElevenLabs reason (no credits, rejected key, missing Text to Speech
+permission, HTTP status). Only an explicit `TTS_PROVIDER=local` narrates with Piper, which uses separate Russian and
+English voices (selected by Cyrillic text) and sounds different from the configured ElevenLabs voice.
+
+`STT_PROVIDER` accepts `auto` (default), `elevenlabs`, or `local`. With a configured private speech worker, `auto`
+falls back to local Whisper on provider quota/authentication/network failure. Quota/authentication failures open a
+24-hour circuit for recognition, persisted across bot restarts; delete `/data/speech-provider.json` and restart the
+bot after restoring the provider quota to retry immediately. `local` always skips ElevenLabs. A successful fallback
+continues the original job and caches completed speech parts. Local Whisper provides timestamps but does **not**
+diarize speakers.
 
 The optional worker uses `scripts/requirements-speech.txt` in a separate Python 3.11+ environment; it loads
 downloaded model files only and listens on `127.0.0.1:8766`. `scripts/speech_worker.py --config CONFIG` expects

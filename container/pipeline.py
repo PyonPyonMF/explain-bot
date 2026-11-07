@@ -341,10 +341,37 @@ def tts(text, prev_text, next_text, path):
         finally:
             from pathlib import Path
             Path(wav).unlink(missing_ok=True)
+    from speech import SpeechError
     try:
         return backend.run("tts",lambda:_tts_eleven(text,prev_text,next_text,path),local)
-    except backend.LocalSpeechError:
-        raise UserError("Локальная озвучка недоступна. Проверь, включён ли домашний компьютер и работает ли служба речи.") from None
+    except backend.LocalSpeechError as exc:
+        raise UserError(tts_failure(str(exc))) from None
+    except SpeechError as exc:
+        raise UserError(tts_failure(str(exc))) from None
+
+
+def tts_failure(code):
+    """A user-facing reason for failed narration; only known status codes, never provider response bodies."""
+    ru = BOT_LANG == "ru"
+    reasons = {
+        "quota_exceeded": ("⚠️ В ElevenLabs закончились кредиты на озвучку. Пополни квоту и повтори запрос.",
+                           "⚠️ ElevenLabs is out of narration credits. Top up the quota and try again."),
+        "invalid_api_key": ("⚠️ ElevenLabs отклонил API-ключ озвучки. Нужно обновить `ELEVENLABS_API_KEY`.",
+                            "⚠️ ElevenLabs rejected the narration API key. Update `ELEVENLABS_API_KEY`."),
+        "missing_permissions": ("⚠️ У API-ключа ElevenLabs нет права на озвучку (Text to Speech).",
+                                "⚠️ The ElevenLabs API key lacks the Text to Speech permission."),
+        "missing_key": ("⚠️ Озвучка ElevenLabs не настроена: нужны `ELEVENLABS_API_KEY` и `ELEVENLABS_VOICE_ID`.",
+                        "⚠️ ElevenLabs narration is not configured: set `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`."),
+        "invalid_speech_provider": ("⚠️ Неверное значение `TTS_PROVIDER`: допустимы `elevenlabs` или `local`.",
+                                    "⚠️ Invalid `TTS_PROVIDER`: use `elevenlabs` or `local`."),
+    }
+    if code in reasons:
+        return reasons[code][0 if ru else 1]
+    if code.startswith("local_speech"):
+        return ("⚠️ Локальная озвучка (TTS_PROVIDER=local) недоступна. Проверь, включён ли домашний компьютер и работает ли служба речи."
+                if ru else "⚠️ Local narration (TTS_PROVIDER=local) is unavailable. Check that the home computer and speech service are running.")
+    return (f"⚠️ ElevenLabs не смог озвучить видео ({code[:20]}). Попробуй ещё раз чуть позже."
+            if ru else f"⚠️ ElevenLabs could not narrate the video ({code[:20]}). Try again a bit later.")
 
 
 def _tts_eleven(text, prev_text, next_text, path):
@@ -359,12 +386,10 @@ def _tts_eleven(text, prev_text, next_text, path):
         body["next_text"] = next_text
     headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"], "content-type": "application/json", "accept": "audio/mpeg"}
     url = f"{ELEVEN_BASE}/v1/text-to-speech/{voice}?output_format=mp3_44100_128"
-    def request():
-        try:
-            return _http(url,json.dumps(body).encode(),headers,timeout=120)
-        except urllib.error.HTTPError as exc:
-            raise SpeechError(provider_error(exc)) from None
-    _, data = request()
+    try:
+        _, data = _http(url,json.dumps(body).encode(),headers,timeout=120)
+    except urllib.error.HTTPError as exc:
+        raise SpeechError(provider_error(exc)) from None
     with open(path, "wb") as f:
         f.write(data)
     return path, probe_duration(path)

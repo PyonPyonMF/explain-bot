@@ -502,10 +502,10 @@ class ExplainBot(discord.Client):
 
 
 def main():
-    required = ("DISCORD_BOT_TOKEN", "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID")
     import speech_backend
-    if speech_backend.configured():
-        required = ("DISCORD_BOT_TOKEN", "ANTHROPIC_API_KEY")
+    required = ("DISCORD_BOT_TOKEN", "ANTHROPIC_API_KEY")
+    if speech_backend.provider("tts") != "local":  # narration is ElevenLabs unless TTS_PROVIDER=local
+        required += ("ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID")
     missing = [name for name in required if not os.environ.get(name, "").strip()]
     if missing:
         raise SystemExit("Missing required settings: " + ", ".join(missing))

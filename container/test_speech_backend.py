@@ -19,14 +19,32 @@ class SpeechBackendTests(unittest.TestCase):
         env.start();self.addCleanup(env.stop)
         state=patch.object(B,'_blocked_until',0);state.start();self.addCleanup(state.stop)
 
-    def test_quota_failure_switches_to_local_and_blocks_both_billed_services_across_restart(self):
+    def test_quota_failure_switches_recognition_to_local_across_restart(self):
         remote=Mock(side_effect=S.SpeechError('quota_exceeded'));local=Mock(return_value='local')
         self.assertEqual(B.run('stt',remote,local),'local')
         B._blocked_until=0
-        tts=Mock(return_value='billed')
-        self.assertEqual(B.run('tts',tts,local),'local');tts.assert_not_called()
+        stt=Mock(return_value='billed')
+        self.assertEqual(B.run('stt',stt,local),'local');stt.assert_not_called()
         self.assertGreater(json.loads((Path(self.directory.name)/'speech-provider.json').read_text())['until'],0)
         self.assertEqual(local.call_count,2)
+
+    def test_narration_is_elevenlabs_even_in_auto_with_an_open_circuit(self):
+        B.block();local=Mock(return_value='piper')
+        for mode in ('auto','elevenlabs',''):
+            with patch.dict(os.environ,{'TTS_PROVIDER':mode}):
+                self.assertEqual(B.run('tts',lambda:'eleven',local),'eleven')
+                with self.assertRaisesRegex(S.SpeechError,'^quota_exceeded$'):
+                    B.run('tts',Mock(side_effect=S.SpeechError('quota_exceeded')),local)
+        local.assert_not_called()
+        with patch.dict(os.environ,{'TTS_PROVIDER':'local'}):self.assertEqual(B.provider('tts'),'local')
+
+    def test_failed_narration_names_elevenlabs_not_the_home_computer(self):
+        path=Path(self.directory.name)/'narration.mp3'
+        for code,needle in (('quota_exceeded','кредит'),('invalid_api_key','ELEVENLABS_API_KEY'),('http_503','http_503')):
+            with patch.object(P,'BOT_LANG','ru'),patch.object(P,'_tts_eleven',side_effect=S.SpeechError(code)),patch.object(B,'synthesize') as piper:
+                with self.assertRaises(P.UserError) as caught:P.tts('Привет',None,None,path)
+            self.assertIn(needle,str(caught.exception));self.assertIn('ElevenLabs',str(caught.exception))
+            self.assertNotIn('домашний',str(caught.exception));piper.assert_not_called()
 
     def test_transient_provider_outage_falls_back_without_a_daylong_block(self):
         remote=Mock(side_effect=urllib.error.URLError('not logged'))

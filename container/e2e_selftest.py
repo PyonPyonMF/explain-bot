@@ -46,8 +46,10 @@ DEFAULT_SCENARIOS = [
     {"request": "джарвис enhance", "expect": "image", "attach": ["sample:picture"]},
     # A new picture from a description: Codex ImageGen in "image" mode.
     {"request": "нарисуй кота-космонавта в стиле советского плаката", "expect": "generated"},
-    # An explanation of a photo becomes a portrait image walkthrough video.
-    {"request": "объясни, что на этой картинке", "expect": "video", "attach": ["sample:picture"]},
+    # An explanation of a photo becomes a portrait image walkthrough video. It runs with the production speech
+    # settings that once produced "Локальная озвучка недоступна": TTS_PROVIDER=auto, a home speech worker that is
+    # configured but switched off, and an open ElevenLabs circuit. Narration must still come from ElevenLabs.
+    {"request": "объясни, что на этой картинке", "expect": "video", "attach": ["sample:picture"], "home_speech_offline": True},
 ]
 FAKE_CODEX = """
 import json, os, sys, uuid
@@ -559,9 +561,36 @@ def tool_ok_calls(tool_id):
     return tool["ok"] if tool else 0
 
 
+def home_speech_offline(world):
+    """TTS_PROVIDER=auto with a configured but unreachable home speech worker and an open 24-hour ElevenLabs circuit."""
+    import speech_backend
+    saved = {k: os.environ.get(k) for k in ("TTS_PROVIDER", "LOCAL_SPEECH_SOCKET", "LOCAL_SPEECH_TOKEN")}
+    os.environ.update({"TTS_PROVIDER": "auto", "LOCAL_SPEECH_TOKEN": "e2e-local-speech",
+                       "LOCAL_SPEECH_SOCKET": str(world.media_dir / "home-computer-is-off.sock")})
+    speech_backend.block()
+
+    def restore():
+        for key, value in saved.items():
+            os.environ.pop(key, None) if value is None else os.environ.__setitem__(key, value)
+        speech_backend._blocked_until = 0.0
+        speech_backend._state_path().unlink(missing_ok=True)
+    return restore
+
+
 def run_scenario(bot, world, scenario):
     import gateway
+    restore = home_speech_offline(world) if scenario.get("home_speech_offline") else None
+    try:
+        return _run_scenario(bot, world, scenario)
+    finally:
+        if restore:
+            restore()
+
+
+def _run_scenario(bot, world, scenario):
+    import gateway
     started = len(world.discord), len(world.model_calls), len(world.jev_calls)
+    tts_before = len(world.tts_calls)
     ok_before = tool_ok_calls(scenario["tool"]) if scenario.get("tool") else 0
     message = FakeMessage(world, scenario["request"], scenario.get("attach") or ())
     clock = time.monotonic()
@@ -595,6 +624,10 @@ def run_scenario(bot, world, scenario):
               status and (status["content"] == expected if expected else status["content"] in strings.values()),
               f"got {status['content'][:80]!r}, expected {expected!r}" if status else "")
         check("final answer delivered", final and final is not status and final["content"].strip(), "status was never replaced")
+        if scenario.get("home_speech_offline") and world.hermetic:
+            check("narration came from ElevenLabs although TTS_PROVIDER=auto, the home computer is off and the circuit is open",
+                  len(world.tts_calls) > tts_before and final and "домашний" not in final["content"],
+                  f"{len(world.tts_calls) - tts_before} ElevenLabs calls; {final['content'][:120] if final else ''}")
         refusal = re.search(r"^(?:⚠️|Не удалось|Не могу)|Попробуй (?:ещё раз|уточнить)|^(?:Could not|I can't)", final["content"].strip()) if final else None
         check("no failure message", final and not refusal and not any(f.split("\n")[0] in final["content"] for f in failures),
               final["content"][:200] if final else "")
